@@ -6,10 +6,22 @@ const FACTOR_LABELS = { wind: "Wind", cold: "Cold", heat: "Heat", rain: "Rain", 
 const $ = (id) => document.getElementById(id);
 
 const LEAGUE_NAMES = { NFL: "NFL", CFB: "College" };
+
+// Weather-event filters. These use their own, looser cutoffs on the forecast values (not the
+// score's flags, which only appear once a factor adds 5+ points), so e.g. 0.1" of snow counts.
+const EVENTS = [
+  { key: "wind", label: "Wind", color: "wind", tip: "Sustained wind over 10 mph", test: (w) => w.wind_mph > 10 },
+  { key: "cold", label: "Cold", color: "cold", tip: "Feels like 32° or colder", test: (w) => w.feels_like_min_f <= 32 },
+  { key: "heat", label: "Heat", color: "heat", tip: "Feels like 90° or hotter", test: (w) => w.feels_like_max_f >= 90 },
+  { key: "rain", label: "Rain", color: "rain", tip: "0.05″ of rain or more", test: (w) => w.rain_in >= 0.05 },
+  { key: "snow", label: "Snow", color: "snow", tip: "0.1″ of snow or more", test: (w) => w.snow_in >= 0.1 },
+  { key: "storm", label: "Storms", color: "storm", tip: "Thunderstorms in the forecast", test: (w) => /thunder/i.test(w.conditions || "") },
+  { key: "likely", label: "Precip likely", color: "rain", tip: "A 50% or higher chance of rain or snow", test: (w) => (w.precip_chance ?? 0) >= 50 },
+];
 const state = {
   games: [], info: {}, hidden: {}, week: "this", autoNext: false,
   league: "all", day: "all", q: "", showAll: false, sort: "score", dir: "desc",
-  favs: new Set(), mine: false, open: new Set(),
+  favs: new Set(), mine: false, open: new Set(), events: new Set(),
 };
 
 // ---- tiny helpers -------------------------------------------------------
@@ -72,17 +84,24 @@ function prepare(g) {
   });
 }
 
-function visible() {
+// Everything except the weather-event chips; the chips' counts are computed over this set.
+function matchesBase(g) {
+  if (g.week !== state.week) return false;
+  if (!state.showAll && !g.hasScore) return false;
+  if (state.league !== "all" && g.league !== state.league) return false;
+  if (state.day !== "all" && g.day !== state.day) return false;
   const q = state.q.trim().toLowerCase();
-  return state.games.filter((g) => {
-    if (g.week !== state.week) return false;
-    if (!state.showAll && !g.hasScore) return false;
-    if (state.league !== "all" && g.league !== state.league) return false;
-    if (state.day !== "all" && g.day !== state.day) return false;
-    if (q && !g.haystack.includes(q)) return false;
-    if (state.mine && !isFav(g)) return false;
-    return true;
-  });
+  if (q && !g.haystack.includes(q)) return false;
+  if (state.mine && !isFav(g)) return false;
+  return true;
+}
+
+const matchesEvent = (g, ev) => Boolean(g.weather) && ev.test(g.weather);
+
+// Picking several chips shows games that match any of them.
+function visible() {
+  const picked = EVENTS.filter((e) => state.events.has(e.key));
+  return state.games.filter((g) => matchesBase(g) && (!picked.length || picked.some((e) => matchesEvent(g, e))));
 }
 
 const SORTS = {
@@ -148,9 +167,10 @@ function severity(score) {
 }
 
 function precipText(w) {
-  if (w.snow_in >= 0.1) return { main: `${w.snow_in}″ snow`, sub: "" };
-  if (w.rain_in >= 0.01) return { main: `${w.rain_in.toFixed(2)}″ rain`, sub: "" };
-  return { main: "None", sub: "" };
+  const chance = w.precip_chance != null && w.precip_chance >= 10 ? `${w.precip_chance}% chance` : "";
+  if (w.snow_in >= 0.1) return { main: `${w.snow_in}″ snow`, sub: chance };
+  if (w.rain_in >= 0.01) return { main: `${w.rain_in.toFixed(2)}″ rain`, sub: chance };
+  return { main: "None", sub: chance };
 }
 
 function statBlock(label, main, sub) {
@@ -224,7 +244,7 @@ function renderDetail(g) {
   const d = el("div", { class: "detail" });
   d.append(el("p", { text: g.matchup }));
   if (g.weather) {
-    d.append(el("p", { class: "muted", text: `${g.weather.conditions}. Feels like ${g.weather.feels_like_min_f}° to ${g.weather.feels_like_max_f}° during the game.` }));
+    d.append(el("p", { class: "muted", text: `${g.weather.conditions}. Feels like ${g.weather.feels_like_min_f}° to ${g.weather.feels_like_max_f}° during the game.${g.weather.precip_chance != null ? ` Up to a ${g.weather.precip_chance}% chance of precipitation.` : ""}` }));
   }
   if (g.trend) {
     const move = Math.abs(g.trend.delta) < 0.5 ? "unchanged" : `${g.trend.delta > 0 ? "up" : "down"} ${Math.abs(g.trend.delta).toFixed(1)}`;
@@ -266,6 +286,38 @@ function renderDetail(g) {
   return d;
 }
 
+function buildEventChips() {
+  const box = $("eventChips");
+  for (const ev of EVENTS) {
+    const chip = el("button", { type: "button", class: "evchip", "data-ev": ev.key, "aria-pressed": "false", title: ev.tip },
+      el("span", { text: ev.label }), " ", el("span", { class: "n", text: "0" }));
+    chip.style.setProperty("--c", `var(--c-${ev.color})`);
+    box.append(chip);
+  }
+  box.addEventListener("click", (e) => {
+    const chip = e.target.closest("button[data-ev]");
+    if (!chip || chip.disabled) return;
+    const k = chip.dataset.ev;
+    if (state.events.has(k)) state.events.delete(k); else state.events.add(k);
+    render();
+  });
+  $("clearEvents").addEventListener("click", () => { state.events.clear(); render(); });
+}
+
+function syncEventChips() {
+  const pool = state.games.filter(matchesBase);
+  for (const chip of document.querySelectorAll("#eventChips .evchip")) {
+    const ev = EVENTS.find((e) => e.key === chip.dataset.ev);
+    const n = pool.filter((g) => matchesEvent(g, ev)).length;
+    const on = state.events.has(ev.key);
+    chip.querySelector(".n").textContent = String(n);
+    chip.setAttribute("aria-pressed", String(on));
+    chip.disabled = n === 0 && !on; // never strand someone in a dead end, but let them undo a pick
+    chip.title = chip.disabled ? `${ev.tip} (no games match right now)` : ev.tip;
+  }
+  $("clearEvents").hidden = state.events.size === 0;
+}
+
 function toggleFav(team, gameId) {
   if (state.favs.has(team)) state.favs.delete(team); else state.favs.add(team);
   store("favs", [...state.favs]);
@@ -300,6 +352,7 @@ function render() {
     b.setAttribute("aria-pressed", String(on));
     b.dataset.arrow = on ? (state.dir === "asc" ? "▲" : "▼") : "";
   }
+  syncEventChips();
   writeUrl();
 }
 
@@ -320,6 +373,7 @@ function readUrl() {
   if (u.get("q")) state.q = u.get("q").slice(0, 80);
   if (u.get("day")) state.day = u.get("day"); // checked against the real days in populateDays
   if (u.get("indoor") === "1") state.showAll = true;
+  state.events = new Set((u.get("event") || "").split(",").filter((k) => EVENTS.some((e) => e.key === k)));
   return Boolean(week);
 }
 
@@ -331,7 +385,8 @@ function writeUrl() {
   if (state.q.trim()) u.set("q", state.q.trim());
   if (state.sort !== "score" || state.dir !== "desc") { u.set("sort", state.sort); u.set("dir", state.dir); }
   if (state.showAll) u.set("indoor", "1");
-  const qs = u.toString();
+  if (state.events.size) u.set("event", EVENTS.filter((e) => state.events.has(e.key)).map((e) => e.key).join(","));
+  const qs = u.toString().replace(/%2C/g, ",");
   try { window.history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "")); } catch (_) { /* e.g. sandboxed preview */ }
 }
 
@@ -363,6 +418,7 @@ function renderWeekLabel() {
 }
 
 function setupControls() {
+  buildEventChips();
   const league = $("league");
   const syncLeague = () => league.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === state.league)));
   league.addEventListener("click", (e) => {

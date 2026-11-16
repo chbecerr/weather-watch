@@ -123,6 +123,21 @@ h1 { margin: 0; font-size: 1.6rem; letter-spacing: -0.01em; }
 .sev-moderate .num { color: var(--moderate); }
 .sev-severe .bar i { background: var(--severe); }
 .sev-severe .num { color: var(--severe); }
+/* Weather-event filter chips */
+.events { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 0 0 12px; }
+.events-label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.evchip {
+  font: inherit; font-size: 0.875rem; padding: 5px 12px; cursor: pointer; border-radius: 99px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--text);
+}
+.evchip .n { color: var(--muted); font-variant-numeric: tabular-nums; margin-left: 2px; }
+.evchip:hover:not(:disabled) { border-color: var(--c); }
+.evchip[aria-pressed="true"] { border-color: var(--c); color: var(--c); background: color-mix(in srgb, var(--c) 14%, var(--surface)); font-weight: 600; }
+.evchip[aria-pressed="true"] .n { color: inherit; }
+.evchip:disabled { opacity: 0.45; cursor: not-allowed; }
+.linkbtn { font: inherit; font-size: 0.875rem; background: none; border: 0; padding: 4px 6px; color: var(--accent); cursor: pointer; text-decoration: underline; }
+
 /* Stadium-local kickoff, game actions, favorites */
 .when .local { display: block; color: var(--muted); font-size: 0.78rem; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }

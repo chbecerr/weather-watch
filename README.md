@@ -59,6 +59,14 @@ This week / Next week switch.
   and adds the new scores to every game's history (kept 8 days). The page shows a ▲/▼ chip
   for games whose score moved 5+ points since about a day ago, and a small history line in
   the game's details. It appears once the site has several hours of history.
+- **Weather filters:** chips for Wind, Cold, Heat, Rain, Snow, Storms and Precip likely
+  show games forecast to have, at some point during the game: sustained wind over 10 mph,
+  feels-like 32° or colder, feels-like 90° or hotter, 0.05″+ rain, 0.1″+ snow, thunderstorms,
+  or a 50%+ chance of precipitation. Several chips mean "any of these". Each chip shows how
+  many of the games in view match it, and the choice goes in the URL (`?event=snow,wind`).
+  These cutoffs are in `docs/app.js` (`EVENTS`) and are separate from the score's flags.
+- **Chance of precipitation:** the Weather Service's highest chance during the game
+  (`precip_chance` in the data). It's shown on each game but doesn't affect the score.
 - **Page features:** a link to each game on ESPN, kickoff in the stadium's time zone
   (when it differs from yours), and an "Only my teams" filter (star a team inside a game's
   details; saved in your browser only). Filters live in the URL, so a link like

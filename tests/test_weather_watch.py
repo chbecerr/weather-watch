@@ -126,6 +126,43 @@ class NwsTests(unittest.TestCase):
         self.assertEqual(h["weather_code"], [95, 0])  # slight chance doesn't count
 
 
+class PrecipChanceTests(unittest.TestCase):
+    def grid(self):
+        return {
+            "temperature": {"uom": "wmoUnit:degC", "values": [
+                {"validTime": "2026-11-22T12:00:00+00:00/PT12H", "value": 10}]},
+            "probabilityOfPrecipitation": {"uom": "wmoUnit:percent", "values": [
+                {"validTime": "2026-11-22T12:00:00+00:00/PT6H", "value": 20},
+                {"validTime": "2026-11-22T18:00:00+00:00/PT3H", "value": 70}]},
+        }
+
+    def test_chance_is_carried_to_every_hour_of_its_interval_and_unknown_is_none(self):
+        h = grid_to_hourly(self.grid())["hourly"]
+        by_hour = dict(zip(h["time"], h["precip_probability"]))
+        self.assertEqual(by_hour["2026-11-22T12:00"], 20)   # not divided up like rainfall
+        self.assertEqual(by_hour["2026-11-22T17:00"], 20)
+        self.assertEqual(by_hour["2026-11-22T19:00"], 70)
+        self.assertIsNone(by_hour["2026-11-22T21:00"])      # no value given for this hour
+
+    def test_game_window_takes_the_highest_chance(self):
+        fc = grid_to_hourly(self.grid())
+        kickoff = datetime(2026, 11, 22, 16, 30, tzinfo=timezone.utc)  # hours 16, 17, 18, 19
+        self.assertEqual(summarize_window(fc, kickoff).precip_chance, 70)
+        early = datetime(2026, 11, 22, 12, 0, tzinfo=timezone.utc)      # hours 12-15
+        self.assertEqual(summarize_window(fc, early).precip_chance, 20)
+
+    def test_no_chance_data_gives_none_not_zero(self):
+        grid = self.grid()
+        del grid["probabilityOfPrecipitation"]
+        fc = grid_to_hourly(grid)
+        kickoff = datetime(2026, 11, 22, 16, 0, tzinfo=timezone.utc)
+        self.assertIsNone(summarize_window(fc, kickoff).precip_chance)
+        old_style = {"hourly": {"time": ["2026-11-22T16:00"], "temperature_2m": [50], "apparent_temperature": [50],
+                                "rain": [0], "showers": [0], "snowfall": [0], "wind_speed_10m": [5],
+                                "wind_gusts_10m": [8], "weather_code": [1]}}
+        self.assertIsNone(summarize_window(old_style, kickoff).precip_chance)  # forecasts without the field still work
+
+
 class LinkAndTimezoneTests(unittest.TestCase):
     def event(self, links):
         e = ev("1", "pre")

@@ -116,12 +116,13 @@ def grid_to_hourly(grid: dict) -> dict:
     gust = _hourly(grid.get("windGust"))
     qpf = _hourly(grid.get("quantitativePrecipitation"), amount=True)
     snow = _hourly(grid.get("snowfallAmount"), amount=True)
+    pop = _hourly(grid.get("probabilityOfPrecipitation"))  # a percentage, so not spread out like amounts
     codes = _weather_codes(grid)
 
     times = sorted(temp)
     hourly = {k: [] for k in (
         "time", "temperature_2m", "apparent_temperature", "rain", "showers",
-        "snowfall", "wind_speed_10m", "wind_gusts_10m", "weather_code",
+        "snowfall", "wind_speed_10m", "wind_gusts_10m", "weather_code", "precip_probability",
     )}
     for t in times:
         sn = snow.get(t, 0.0)
@@ -135,6 +136,7 @@ def grid_to_hourly(grid: dict) -> dict:
         hourly["wind_speed_10m"].append(wind.get(t, 0.0))
         hourly["wind_gusts_10m"].append(gust.get(t, wind.get(t, 0.0)))
         hourly["weather_code"].append(codes.get(t, 0))
+        hourly["precip_probability"].append(pop.get(t))  # None = the Weather Service gave no value
     return {"hourly": hourly}
 
 

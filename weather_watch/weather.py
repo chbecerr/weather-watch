@@ -57,6 +57,7 @@ class GameWeather:
     rain_in: float
     snow_in: float
     weather_code: int
+    precip_chance: float | None = None  # highest chance of precipitation (%) during the game
 
     @property
     def conditions(self) -> str:
@@ -154,6 +155,11 @@ def summarize_window(forecast: dict, kickoff: datetime, hours: int = GAME_HOURS)
         return vals or [0.0]
 
     codes = col("weather_code")
+    chances = [
+        h["precip_probability"][i]
+        for i in idx
+        if h.get("precip_probability") and h["precip_probability"][i] is not None
+    ]
     return GameWeather(
         temp_f=col("temperature_2m")[0],
         feels_min_f=min(col("apparent_temperature")),
@@ -163,4 +169,5 @@ def summarize_window(forecast: dict, kickoff: datetime, hours: int = GAME_HOURS)
         rain_in=sum(col("rain")) + sum(col("showers")),
         snow_in=sum(col("snowfall")),
         weather_code=int(max(codes)),  # WMO codes rise roughly with severity
+        precip_chance=max(chances) if chances else None,
     )
