@@ -94,6 +94,8 @@ h1 { margin: 0; font-size: 1.6rem; letter-spacing: -0.01em; }
 }
 .field.grow { flex: 1 1 200px; }
 .field.grow input { width: 100%; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+@media (max-width: 600px) { .field.grow { flex-basis: 100%; } }
 .check { display: inline-flex; align-items: center; gap: 8px; font-size: 0.9rem; color: var(--muted); cursor: pointer; }
 .check input { width: 18px; height: 18px; accent-color: var(--accent); }
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
@@ -121,6 +123,16 @@ h1 { margin: 0; font-size: 1.6rem; letter-spacing: -0.01em; }
 .sev-moderate .num { color: var(--moderate); }
 .sev-severe .bar i { background: var(--severe); }
 .sev-severe .num { color: var(--severe); }
+/* Stadium-local kickoff, game actions, favorites */
+.when .local { display: block; color: var(--muted); font-size: 0.78rem; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.favbtn {
+  font: inherit; font-size: 0.85rem; padding: 4px 11px; cursor: pointer; border-radius: 99px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--text);
+}
+.favbtn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+.actions a { font-size: 0.9rem; }
+
 /* Score movement since about a day ago */
 .trend { font-size: 0.75rem; font-weight: 700; padding: 1px 7px; border-radius: 99px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .trend.up { color: var(--severe); background: color-mix(in srgb, var(--severe) 14%, transparent); }
@@ -168,7 +180,7 @@ h1 { margin: 0; font-size: 1.6rem; letter-spacing: -0.01em; }
 /* Wider screens: table-like rows */
 @media (min-width: 820px) {
   .head, .summary {
-    display: grid; grid-template-columns: 190px minmax(0, 1.6fr) 96px 78px 88px 88px minmax(0, 1fr); gap: 0 14px; align-items: center;
+    display: grid; grid-template-columns: 190px minmax(0, 1.5fr) 116px 78px 88px 88px minmax(0, 1fr); gap: 0 14px; align-items: center;
   }
   .head { padding: 0 14px 6px; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
   .head button { all: unset; cursor: pointer; text-align: left; }

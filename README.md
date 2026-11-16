@@ -55,6 +55,14 @@ This week / Next week switch.
 - A GitHub Actions workflow (`.github/workflows/pages.yml`) runs the tool every
   3 hours with `--site-data docs/data.json` and publishes `docs/` to GitHub Pages.
   If the weather data can't be fetched the run fails and the previous site stays up.
+- **Score history:** each run downloads the live site's previous `data.json` (`--previous`)
+  and adds the new scores to every game's history (kept 8 days). The page shows a ▲/▼ chip
+  for games whose score moved 5+ points since about a day ago, and a small history line in
+  the game's details. It appears once the site has several hours of history.
+- **Page features:** a link to each game on ESPN, kickoff in the stadium's time zone
+  (when it differs from yours), and an "Only my teams" filter (star a team inside a game's
+  details; saved in your browser only). Filters live in the URL, so a link like
+  `?week=next&league=NFL&sort=wind` keeps them.
 - One-time setup: **Settings > Pages > Build and deployment > Source: GitHub Actions**,
   then merge to `main`. Use the Actions tab's "Run workflow" button for an on-demand refresh.
 - Preview locally:

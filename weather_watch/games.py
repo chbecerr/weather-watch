@@ -37,6 +37,7 @@ class Game:
     status: str  # pre / in / post
     espn_id: str
     extra: dict = field(default_factory=dict)
+    link: str = ""  # ESPN's page for the game
 
     @property
     def location_label(self) -> str:
@@ -49,6 +50,18 @@ def _parse_time(s: str) -> datetime:
     # ESPN uses e.g. "2026-11-22T18:00Z"
     s = s.replace("Z", "+00:00")
     return datetime.fromisoformat(s).astimezone(timezone.utc)
+
+
+ESPN_LINK_PREFIX = "https://www.espn.com/"
+
+
+def _game_link(ev: dict) -> str:
+    """ESPN's own page for the game; anything that isn't an espn.com link is ignored."""
+    for link in ev.get("links") or []:
+        href = link.get("href") or ""
+        if "summary" in (link.get("rel") or []) and href.startswith(ESPN_LINK_PREFIX):
+            return href
+    return ""
 
 
 def parse_events(league: str, payload: dict) -> list[Game]:
@@ -73,6 +86,7 @@ def parse_events(league: str, payload: dict) -> list[Game]:
                 neutral_site=bool(comp.get("neutralSite", False)),
                 status=((comp.get("status") or {}).get("type") or {}).get("state", "pre"),
                 espn_id=str(ev.get("id", "")),
+                link=_game_link(ev),
             )
         )
     return games

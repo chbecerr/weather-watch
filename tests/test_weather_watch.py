@@ -7,6 +7,7 @@ from weather_watch.games import parse_events
 from weather_watch import history
 from weather_watch.site import UnhealthyData, build_payload
 from weather_watch import weather as weather_mod
+from weather_watch import nws as nws_mod
 from weather_watch.nws import grid_to_hourly, parse_valid_time
 from weather_watch.scoring import score
 from weather_watch.weather import GameWeather, summarize_window
@@ -123,6 +124,36 @@ class NwsTests(unittest.TestCase):
         self.assertAlmostEqual(h["wind_speed_10m"][0], 10)
         self.assertAlmostEqual(h["rain"][0], 0.5)  # 1" over 2 hours, spread evenly
         self.assertEqual(h["weather_code"], [95, 0])  # slight chance doesn't count
+
+
+class LinkAndTimezoneTests(unittest.TestCase):
+    def event(self, links):
+        e = ev("1", "pre")
+        e["links"] = links
+        return {"events": [e]}
+
+    def test_espn_game_link_is_kept(self):
+        link = [{"rel": ["summary", "desktop", "event"], "href": "https://www.espn.com/nfl/game/_/gameId/1/a-b"}]
+        (g,) = parse_events("nfl", self.event(link))
+        self.assertEqual(g.link, "https://www.espn.com/nfl/game/_/gameId/1/a-b")
+
+    def test_non_espn_or_missing_links_are_dropped(self):
+        for links in ([], None, [{"rel": ["summary"], "href": "javascript:alert(1)"}],
+                      [{"rel": ["summary"], "href": "https://evil.example/x"}],
+                      [{"rel": ["clubhouse"], "href": "https://www.espn.com/nfl/team"}]):
+            (g,) = parse_events("nfl", self.event(links))
+            self.assertEqual(g.link, "", links)
+
+    def test_forecast_carries_the_stadiums_timezone(self):
+        points = {"properties": {"forecastGridData": "https://api.weather.gov/gridpoints/CAE/65,61", "timeZone": "America/New_York"}}
+        grid = {"properties": {"temperature": {"uom": "wmoUnit:degC", "values": [
+            {"validTime": "2026-11-22T00:00:00+00:00/PT2H", "value": 10}]}}}
+        fake = lambda url, *a, **k: points if "/points/" in url else grid
+        with mock.patch.object(nws_mod, "get_json", side_effect=fake), \
+             mock.patch.object(nws_mod, "load_cache", return_value={}), mock.patch.object(nws_mod, "save_cache"):
+            out = nws_mod.fetch_forecasts([(34.0, -81.03)])
+        self.assertEqual(out[(34.0, -81.03)]["timezone"], "America/New_York")
+        self.assertIn("hourly", out[(34.0, -81.03)])
 
 
 class GeocodeTests(unittest.TestCase):

@@ -15,7 +15,7 @@ from .http import get_json
 from .weather import load_cache, save_cache
 
 POINTS_URL = "https://api.weather.gov/points/{lat:.4f},{lon:.4f}"
-CACHE_NAME = "nws_grids.json"
+CACHE_NAME = "nws_grids-v2.json"  # v2 also stores each point's time zone
 
 _DURATION = re.compile(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$")
 
@@ -138,18 +138,20 @@ def grid_to_hourly(grid: dict) -> dict:
     return {"hourly": hourly}
 
 
-def _grid_url(lat: float, lon: float, cache: dict) -> str | None:
+def _point(lat: float, lon: float, cache: dict) -> dict | None:
+    """{"grid": forecast URL, "tz": IANA time zone} for a location, cached."""
     key = f"{lat:.4f},{lon:.4f}"
-    if key in cache:
-        return cache[key]
+    hit = cache.get(key)
+    if isinstance(hit, dict) and hit.get("grid"):
+        return hit
     try:
         props = get_json(POINTS_URL.format(lat=lat, lon=lon))["properties"]
     except Exception:
         return None  # outside the US (404) or a transient failure
-    url = props.get("forecastGridData")
-    if url:
-        cache[key] = url
-    return url
+    if not props.get("forecastGridData"):
+        return None
+    cache[key] = {"grid": props["forecastGridData"], "tz": props.get("timeZone")}
+    return cache[key]
 
 
 def fetch_forecasts(coords: list[tuple[float, float]]) -> dict[tuple[float, float], dict | None]:
@@ -157,13 +159,15 @@ def fetch_forecasts(coords: list[tuple[float, float]]) -> dict[tuple[float, floa
     cache = load_cache(CACHE_NAME)
 
     def one(c):
-        url = _grid_url(c[0], c[1], cache)
-        if not url:
+        point = _point(c[0], c[1], cache)
+        if not point:
             return None
         try:
-            return grid_to_hourly(get_json(url)["properties"])
+            forecast = grid_to_hourly(get_json(point["grid"])["properties"])
         except Exception:
             return None
+        forecast["timezone"] = point.get("tz")
+        return forecast
 
     with ThreadPoolExecutor(max_workers=6) as pool:
         results = list(pool.map(one, coords))

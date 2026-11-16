@@ -9,6 +9,7 @@ const LEAGUE_NAMES = { NFL: "NFL", CFB: "College" };
 const state = {
   games: [], info: {}, hidden: {}, week: "this", autoNext: false,
   league: "all", day: "all", q: "", showAll: false, sort: "score", dir: "desc",
+  favs: new Set(), mine: false, open: new Set(),
 };
 
 // ---- tiny helpers -------------------------------------------------------
@@ -49,11 +50,19 @@ function ago(ms) {
 
 // ---- model --------------------------------------------------------------
 
+// "Pittsburgh Steelers at Cincinnati Bengals" / "Minnesota Vikings vs San Francisco 49ers"
+function teamsOf(matchup) {
+  const m = /^(.*?) (?:at|vs\.?) (.*)$/i.exec(matchup || "");
+  return m ? [m[1], m[2]] : [];
+}
+const isFav = (g) => g.teams.some((t) => state.favs.has(t));
+
 function prepare(g) {
   const kickoff = new Date(g.kickoff_utc);
   const w = g.weather;
   return Object.assign({}, g, {
     kickoff,
+    teams: teamsOf(g.matchup),
     day: dayKey(kickoff),
     hasScore: g.score != null && !g.indoor,
     sortTemp: w ? w.feels_like_min_f : null,
@@ -71,6 +80,7 @@ function visible() {
     if (state.league !== "all" && g.league !== state.league) return false;
     if (state.day !== "all" && g.day !== state.day) return false;
     if (q && !g.haystack.includes(q)) return false;
+    if (state.mine && !isFav(g)) return false;
     return true;
   });
 }
@@ -147,9 +157,21 @@ function statBlock(label, main, sub) {
   return el("span", { class: "stat", "data-label": label }, el("span", { text: main }), sub ? el("span", { class: "sub", text: sub }) : null);
 }
 
+// Kickoff in the stadium's time zone, or null if that reads the same as the viewer's time.
+function stadiumTime(g) {
+  if (!g.venue_tz || g.time_tba) return null;
+  try {
+    const wall = (tz) => new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: tz }).format(g.kickoff);
+    if (wall(g.venue_tz) === wall(undefined)) return null;
+    return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", timeZone: g.venue_tz, timeZoneName: "short" }).format(g.kickoff);
+  } catch (_) {
+    return null;
+  }
+}
+
 function renderGame(g, maxScore) {
   const w = g.weather;
-  const li = el("li", { class: "game" });
+  const li = el("li", { class: "game", "data-id": g.id });
 
   const score = el("span", { class: "score " + (g.hasScore ? severity(g.score) : "noscore") });
   score.append(el("span", { class: "num", text: g.hasScore ? g.score.toFixed(1) : "–" }));
@@ -160,11 +182,13 @@ function renderGame(g, maxScore) {
   }
 
   const place = g.venue.includes(g.location) ? g.venue : `${g.venue} · ${g.location}`;
-  const who = el("span", { class: "who" }, el("strong", { text: `${g.league === "CFB" ? "🎓" : "🏈"} ${g.game}` }), el("small", { text: place }));
+  const who = el("span", { class: "who" }, el("strong", { text: `${isFav(g) ? "★ " : ""}${g.league === "CFB" ? "🎓" : "🏈"} ${g.game}` }), el("small", { text: place }));
 
   const when = el("span", { class: "when" },
     el("span", { text: dayFmt.format(g.kickoff) }), " ",
     el("span", { class: "t", text: g.time_tba ? "TBA" : timeFmt.format(g.kickoff) }));
+  const there = stadiumTime(g);
+  if (there) when.append(el("span", { class: "local", text: `${there} there`, title: "Kickoff in the stadium's time zone" }));
 
   const stats = el("span", { class: "stats" });
   const flags = el("span", { class: "flags" });
@@ -179,16 +203,19 @@ function renderGame(g, maxScore) {
     stats.append(el("span", { class: "stat", "data-label": "Weather" }, el("span", { text: g.indoor ? "Indoor" : "No forecast" })));
   }
   if (g.status === "in") flags.append(el("span", { class: "chip LIVE", text: "LIVE" }));
+  if (g.time_tba) flags.append(el("span", { class: "chip NOTE", text: "TIME TBA", title: "Kickoff time not set yet; the forecast uses ESPN's placeholder time" }));
   for (const t of g.tags || []) flags.append(el("span", { class: "chip " + t, text: t }));
 
   const detail = renderDetail(g);
-  const btn = el("button", { class: "summary", type: "button", "aria-expanded": "false" }, score, who, when, stats, flags);
+  const startOpen = state.open.has(g.id);
+  const btn = el("button", { class: "summary", type: "button", "aria-expanded": String(startOpen) }, score, who, when, stats, flags);
   btn.addEventListener("click", () => {
     const open = btn.getAttribute("aria-expanded") === "true";
     btn.setAttribute("aria-expanded", String(!open));
     detail.hidden = open;
+    if (open) state.open.delete(g.id); else state.open.add(g.id);
   });
-  detail.hidden = true;
+  detail.hidden = !startOpen;
   li.append(btn, detail);
   return li;
 }
@@ -217,7 +244,36 @@ function renderDetail(g) {
     d.append(el("p", { class: "muted", text: "Nothing crossed a comfort threshold, so this game scores 0." }));
   }
   if (g.note) d.append(el("p", { class: "muted", text: g.note }));
+
+  if (!g.time_tba) {
+    const there = stadiumTime(g);
+    d.append(el("p", { class: "muted", text: `Kickoff ${timeFmt.format(g.kickoff)} your time${there ? ` · ${there} at the stadium` : ""}.` }));
+  }
+  const actions = el("div", { class: "actions" });
+  for (const team of g.teams) {
+    const fav = state.favs.has(team);
+    const b = el("button", {
+      type: "button", class: "favbtn", "data-team": team, "aria-pressed": String(fav),
+      title: fav ? "Remove from my teams" : "Add to my teams", text: `${fav ? "★" : "☆"} ${team}`,
+    });
+    b.addEventListener("click", () => toggleFav(team, g.id));
+    actions.append(b);
+  }
+  if (g.link && g.link.startsWith("https://www.espn.com/")) {
+    actions.append(el("a", { href: g.link, target: "_blank", rel: "noopener noreferrer", text: "Game page on ESPN ↗" }));
+  }
+  if (actions.childNodes.length) d.append(actions);
   return d;
+}
+
+function toggleFav(team, gameId) {
+  if (state.favs.has(team)) state.favs.delete(team); else state.favs.add(team);
+  store("favs", [...state.favs]);
+  render();
+  // The list was rebuilt; put keyboard focus back where the user was.
+  const again = [...document.querySelectorAll(".game")].find((li) => li.dataset.id === gameId);
+  const btn = again && [...again.querySelectorAll(".favbtn")].find((b) => b.dataset.team === team);
+  if (btn) btn.focus();
 }
 
 function render() {
@@ -230,9 +286,11 @@ function render() {
   const inWeek = state.games.filter((g) => g.week === state.week && (state.showAll || g.hasScore)).length;
   const left = state.hidden[state.week] || 0;
   $("empty").hidden = rows.length > 0;
-  $("empty").textContent = inWeek === 0
-    ? "No games with a forecast yet for this week. Forecasts reach about 7 days ahead, so check back later."
-    : "No games match those filters.";
+  $("empty").textContent = state.mine && state.favs.size === 0
+    ? "You haven't picked any teams yet. Open a game and tap a team's star to add it to your teams."
+    : inWeek === 0
+      ? "No games with a forecast yet for this week. Forecasts reach about 7 days ahead, so check back later."
+      : "No games match those filters.";
   $("count").textContent = [
     rows.length ? `${rows.length} game${rows.length === 1 ? "" : "s"}` : "",
     left ? `${left} not shown (no forecast yet)` : "",
@@ -242,6 +300,39 @@ function render() {
     b.setAttribute("aria-pressed", String(on));
     b.dataset.arrow = on ? (state.dir === "asc" ? "▲" : "▼") : "";
   }
+  writeUrl();
+}
+
+// ---- shareable URLs -----------------------------------------------------
+// Filters live in the query string (?week=next&league=NFL&sort=wind...) so a link keeps them.
+// Favorites stay private to this browser and are not part of the link.
+
+function readUrl() {
+  const u = new URLSearchParams(location.search);
+  const pick = (k, allowed) => (allowed.includes(u.get(k)) ? u.get(k) : null);
+  const week = pick("week", ["this", "next"]);
+  if (week) state.week = week;
+  const league = pick("league", ["all", "NFL", "CFB"]);
+  if (league) state.league = league;
+  const sort = pick("sort", Object.keys(SORTS));
+  const dir = pick("dir", ["asc", "desc"]);
+  if (sort) { state.sort = sort; state.dir = dir || DEFAULT_DIR[sort]; }
+  if (u.get("q")) state.q = u.get("q").slice(0, 80);
+  if (u.get("day")) state.day = u.get("day"); // checked against the real days in populateDays
+  if (u.get("indoor") === "1") state.showAll = true;
+  return Boolean(week);
+}
+
+function writeUrl() {
+  const u = new URLSearchParams();
+  if (state.week === "next" && !state.autoNext) u.set("week", "next");
+  if (state.league !== "all") u.set("league", state.league);
+  if (state.day !== "all") u.set("day", state.day);
+  if (state.q.trim()) u.set("q", state.q.trim());
+  if (state.sort !== "score" || state.dir !== "desc") { u.set("sort", state.sort); u.set("dir", state.dir); }
+  if (state.showAll) u.set("indoor", "1");
+  const qs = u.toString();
+  try { window.history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "")); } catch (_) { /* e.g. sandboxed preview */ }
 }
 
 // ---- wiring -------------------------------------------------------------
@@ -293,6 +384,9 @@ function setupControls() {
 
   $("day").addEventListener("change", (e) => { state.day = e.target.value; render(); });
   $("q").addEventListener("input", (e) => { state.q = e.target.value; render(); });
+  $("q").value = state.q;
+  $("mine").checked = state.mine;
+  $("mine").addEventListener("change", (e) => { state.mine = e.target.checked; store("mine", state.mine); render(); });
   $("showAll").checked = state.showAll;
   $("showAll").addEventListener("change", (e) => { state.showAll = e.target.checked; store("showAll", state.showAll); populateDays(); render(); });
 
@@ -320,6 +414,10 @@ async function main() {
   const saved = store("league");
   if (["all", "NFL", "CFB"].includes(saved)) state.league = saved;
   state.showAll = store("showAll") === true;
+  state.mine = store("mine") === true;
+  const savedFavs = store("favs");
+  if (Array.isArray(savedFavs)) state.favs = new Set(savedFavs.filter((t) => typeof t === "string"));
+  const weekFromUrl = readUrl(); // links override remembered preferences
   try {
     const res = await fetch("data.json", { cache: "no-cache" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -337,7 +435,7 @@ async function main() {
     return;
   }
   const count = (w) => state.games.filter((g) => g.week === w && g.hasScore).length;
-  if (count("this") === 0 && count("next") > 0) { state.week = "next"; state.autoNext = true; }
+  if (!weekFromUrl && count("this") === 0 && count("next") > 0) { state.week = "next"; state.autoNext = true; }
   populateDays();
   setupControls();
   renderWeekLabel();

@@ -62,6 +62,8 @@ def build_report(leagues: list[str], weeks: tuple[str, ...] = ("this", "next")):
             "week": key,
             "week_label": week_info[key][g.league.upper()]["label"],
             "league": g.league.upper(),
+            "link": g.link,
+            "venue_tz": None,
             "game": g.short_name,
             "matchup": g.name,
             "kickoff_utc": g.kickoff.isoformat(),
@@ -86,7 +88,7 @@ def build_report(leagues: list[str], weeks: tuple[str, ...] = ("this", "next")):
                 hidden[key] += 1  # no forecast: leave the game out
                 continue
             s_ = score(w)
-            row.update(score=s_.total, factors=s_.parts, tags=s_.tags)
+            row.update(score=s_.total, factors=s_.parts, tags=s_.tags, venue_tz=fc.get("timezone"))
             row["weather"] = {
                 "temp_f": round(w.temp_f),
                 "feels_like_min_f": round(w.feels_min_f),
