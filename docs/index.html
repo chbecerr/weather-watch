@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Weather Watch</title>
+  <meta name="description" content="This week's NFL and FBS games ranked by how extreme the weather is at the stadium.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8C%AA%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <h1>Weather Watch</h1>
+      <p class="tagline">This week's NFL and FBS games, ranked by how extreme the weather is at the stadium.</p>
+      <p class="updated" id="updated" aria-live="polite">Loading…</p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div id="stale" class="banner" hidden></div>
+
+    <section class="controls" aria-label="Filters">
+      <div class="seg" role="group" aria-label="League" id="league">
+        <button type="button" data-v="all" aria-pressed="true">All</button>
+        <button type="button" data-v="NFL" aria-pressed="false">NFL</button>
+        <button type="button" data-v="CFB" aria-pressed="false">College</button>
+      </div>
+      <label class="field">
+        <span class="sr">Day</span>
+        <select id="day"><option value="all">All days</option></select>
+      </label>
+      <label class="field grow">
+        <span class="sr">Search</span>
+        <input id="q" type="search" placeholder="Search team, stadium or city" autocomplete="off">
+      </label>
+      <label class="check">
+        <input id="showAll" type="checkbox">
+        <span>Show indoor and no-forecast games</span>
+      </label>
+    </section>
+
+    <div class="head" id="head" role="group" aria-label="Sort by">
+      <button type="button" data-sort="score">Score</button>
+      <button type="button" data-sort="game">Game</button>
+      <button type="button" data-sort="kickoff">Kickoff</button>
+      <button type="button" data-sort="temp">Temp</button>
+      <button type="button" data-sort="wind">Wind</button>
+      <button type="button" data-sort="precip">Precip</button>
+      <span>Flags</span>
+    </div>
+
+    <p id="count" class="count" aria-live="polite"></p>
+    <ol class="list" id="list"></ol>
+    <p id="empty" class="empty" hidden>No games match those filters.</p>
+    <p id="error" class="empty" hidden></p>
+  </main>
+
+  <footer class="wrap foot">
+    <p><strong>How to read it.</strong> The score adds points for cold, heat, wind, rain, snow and thunderstorms, only past a comfort level, so a calm, dry, mild game scores 0. Click a game to see the breakdown.</p>
+    <p>Temp is at kickoff; "feels" is the coldest feels-like during the game; wind is the top sustained speed with the top gust beneath it. Forecasts are for the stadium's city and come from the US National Weather Service, so they cover US venues about 7 days ahead and get less certain the further out the game is.</p>
+    <p><a href="https://github.com/chbecerr/weather-watch">Source on GitHub</a></p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

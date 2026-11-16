@@ -2,6 +2,7 @@ import unittest
 from datetime import datetime, timezone
 
 from weather_watch.games import parse_events
+from weather_watch.site import UnhealthyData, build_payload
 from weather_watch.nws import grid_to_hourly, parse_valid_time
 from weather_watch.scoring import score
 from weather_watch.weather import GameWeather, summarize_window
@@ -118,6 +119,28 @@ class NwsTests(unittest.TestCase):
         self.assertAlmostEqual(h["wind_speed_10m"][0], 10)
         self.assertAlmostEqual(h["rain"][0], 0.5)  # 1" over 2 hours, spread evenly
         self.assertEqual(h["weather_code"], [95, 0])  # slight chance doesn't count
+
+
+class SiteDataTests(unittest.TestCase):
+    def row(self, indoor=False, weather=True):
+        return {"indoor": indoor, "weather": {"temp_f": 50} if weather else None}
+
+    def test_payload_wraps_rows_with_timestamp(self):
+        now = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
+        out = build_payload([self.row()], 7, now=now)
+        self.assertEqual(out["generated_at"], "2026-11-20T12:00:00+00:00")
+        self.assertEqual(len(out["games"]), 1)
+
+    def test_refuses_when_no_outdoor_game_has_a_forecast(self):
+        with self.assertRaises(UnhealthyData):
+            build_payload([self.row(weather=False), self.row(indoor=True, weather=False)], 7)
+
+    def test_allows_a_week_with_only_indoor_games_or_none(self):
+        build_payload([self.row(indoor=True, weather=False)], 7)
+        build_payload([], 7)
+
+    def test_allows_partial_forecast_coverage(self):
+        build_payload([self.row(), self.row(weather=False)], 7)
 
 
 if __name__ == "__main__":

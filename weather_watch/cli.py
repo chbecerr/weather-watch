@@ -13,6 +13,7 @@ from . import nws
 from . import weather as wx
 from .http import NetworkError
 from .scoring import score
+from .site import UnhealthyData, build_payload, write_payload
 
 
 def build_report(leagues: list[str], days: int) -> list[dict]:
@@ -132,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--include-indoor", action="store_true", help="also list dome/indoor games")
     p.add_argument("--tz", default="America/New_York", help="timezone for kickoff times")
     p.add_argument("--json", action="store_true", help="emit JSON instead of a table")
+    p.add_argument("--site-data", metavar="PATH", help="write the website's data file (all games) to PATH")
     args = p.parse_args(argv)
 
     leagues = ["nfl", "cfb"] if args.league == "all" else [args.league]
@@ -145,6 +147,16 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
+    if args.site_data:
+        days = min(max(args.days, 1), 7)
+        try:
+            payload = build_payload(rows, days)
+        except UnhealthyData as err:
+            print(f"error: not writing {args.site_data}: {err}", file=sys.stderr)
+            return 1
+        write_payload(payload, args.site_data)
+        print(f"wrote {len(rows)} games to {args.site_data}", file=sys.stderr)
+        return 0
     if not args.include_indoor:
         rows = [r for r in rows if not r["indoor"]]
     if args.top:

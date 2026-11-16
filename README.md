@@ -40,6 +40,23 @@ Or install it with `pip install .` and run `weather-watch`.
    US (or more than ~7 days out) show "no NWS forecast".
 4. **Indoor venues** (ESPN's `indoor` flag, plus SoFi Stadium) are skipped by default.
 
+## Website
+
+`docs/` is a static site (plain HTML/CSS/JS, no build step) that shows the
+rankings as a sortable, filterable list that works on phones.
+
+- A GitHub Actions workflow (`.github/workflows/pages.yml`) runs the tool every
+  3 hours with `--site-data docs/data.json` and publishes `docs/` to GitHub Pages.
+  If the weather data can't be fetched the run fails and the previous site stays up.
+- One-time setup: **Settings > Pages > Build and deployment > Source: GitHub Actions**,
+  then merge to `main`. Use the Actions tab's "Run workflow" button for an on-demand refresh.
+- Preview locally:
+
+```bash
+python3 -m weather_watch --site-data docs/data.json
+python3 -m http.server -d docs 8000   # open http://localhost:8000
+```
+
 ## Score
 
 Each factor adds points only past a comfort threshold, so a calm, dry, mild
