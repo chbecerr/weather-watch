@@ -97,21 +97,21 @@ def geocode(city: str, state: str, country: str) -> tuple[float, float] | None:
     return best["latitude"], best["longitude"]
 
 
-def _cache_path() -> Path:
+def _cache_path(name: str = "geocode.json") -> Path:
     base = os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache"
-    return Path(base) / "weather-watch" / "geocode.json"
+    return Path(base) / "weather-watch" / name
 
 
-def _load_cache() -> dict[str, list[float]]:
+def load_cache(name: str = "geocode.json") -> dict:
     try:
-        return json.loads(_cache_path().read_text())
+        return json.loads(_cache_path(name).read_text())
     except (OSError, ValueError):
         return {}
 
 
-def _save_cache(cache: dict[str, list[float]]) -> None:
+def save_cache(cache: dict, name: str = "geocode.json") -> None:
     try:
-        path = _cache_path()
+        path = _cache_path(name)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(cache, indent=1, sort_keys=True))
     except OSError:
@@ -120,7 +120,7 @@ def _save_cache(cache: dict[str, list[float]]) -> None:
 
 def geocode_many(places: set[tuple[str, str, str]]) -> dict[tuple[str, str, str], tuple[float, float] | None]:
     """Geocode venue cities, using an on-disk cache (stadiums don't move)."""
-    cache = _load_cache()
+    cache = load_cache()
     key = "|".join
     out: dict[tuple[str, str, str], tuple[float, float] | None] = {}
     missing = []
@@ -137,7 +137,7 @@ def geocode_many(places: set[tuple[str, str, str]]) -> dict[tuple[str, str, str]
             out[p] = c
             if c:
                 cache[key(p)] = list(c)
-        _save_cache(cache)
+        save_cache(cache)
     return out
 
 
@@ -148,7 +148,9 @@ def _safe_geocode(city, state, country):
         return None
 
 
-def fetch_forecasts(coords: list[tuple[float, float]], chunk: int = 50) -> list[dict]:
+def fetch_forecasts(
+    coords: list[tuple[float, float]], chunk: int = 50, retries: int = 3, timeout: float = 20.0
+) -> list[dict]:
     """Hourly forecasts (UTC) for many points; Open-Meteo accepts comma-separated lists."""
     out: list[dict] = []
     for i in range(0, len(coords), chunk):
@@ -166,6 +168,8 @@ def fetch_forecasts(coords: list[tuple[float, float]], chunk: int = 50) -> list[
                 "past_days": 1,
                 "forecast_days": 16,
             },
+            retries=retries,
+            timeout=timeout,
         )
         out.extend(data if isinstance(data, list) else [data])
     return out

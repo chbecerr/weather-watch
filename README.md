@@ -21,6 +21,7 @@ python3 -m weather_watch --top 10        # just the 10 nastiest
 python3 -m weather_watch --league nfl    # nfl | cfb | all
 python3 -m weather_watch --include-indoor --tz America/Chicago
 python3 -m weather_watch --json          # machine-readable, includes score breakdown
+python3 -m weather_watch --source nws    # skip Open-Meteo, use the National Weather Service
 ```
 
 Or install it with `pip install .` and run `weather-watch`.
@@ -35,6 +36,10 @@ Or install it with `pip install .` and run `weather-watch`.
    cached in `~/.cache/weather-watch/geocode.json`, so later runs skip this step.
 3. **Weather**: Open-Meteo hourly forecast (up to 16 days out), one batched
    request. The tool looks at the 4 hours starting at kickoff.
+   If `api.open-meteo.com` can't be reached (some networks block it), the tool
+   falls back to the US National Weather Service (`api.weather.gov`): US
+   venues only, about 7 days ahead. Use `--source nws` to go straight there,
+   or `--source open-meteo` to never fall back.
 4. **Indoor venues** (ESPN's `indoor` flag, plus SoFi Stadium) are skipped by default.
 
 ## Score

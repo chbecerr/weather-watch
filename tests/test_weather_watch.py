@@ -2,6 +2,7 @@ import unittest
 from datetime import datetime, timezone
 
 from weather_watch.games import parse_events
+from weather_watch.nws import grid_to_hourly, parse_valid_time
 from weather_watch.scoring import score
 from weather_watch.weather import GameWeather, summarize_window
 
@@ -86,6 +87,37 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(g.location_label, "Orchard Park, NY")
         self.assertFalse(g.indoor)
         self.assertTrue(sofi.indoor)
+
+
+class NwsTests(unittest.TestCase):
+    def test_parse_valid_time(self):
+        start, hours = parse_valid_time("2026-11-15T18:00:00+00:00/P1DT6H")
+        self.assertEqual(start, datetime(2026, 11, 15, 18, tzinfo=timezone.utc))
+        self.assertEqual(hours, 30)
+        self.assertEqual(parse_valid_time("2026-11-15T18:00:00+00:00/PT2H")[1], 2)
+
+    def test_grid_converted_to_open_meteo_shape(self):
+        grid = {
+            "temperature": {"uom": "wmoUnit:degC", "values": [
+                {"validTime": "2026-11-22T18:00:00+00:00/PT2H", "value": 0}]},
+            "windSpeed": {"uom": "wmoUnit:km_h-1", "values": [
+                {"validTime": "2026-11-22T18:00:00+00:00/PT2H", "value": 16.09344}]},
+            "quantitativePrecipitation": {"uom": "wmoUnit:mm", "values": [
+                {"validTime": "2026-11-22T18:00:00+00:00/PT2H", "value": 25.4}]},
+            "snowfallAmount": {"uom": "wmoUnit:mm", "values": [
+                {"validTime": "2026-11-22T18:00:00+00:00/PT2H", "value": 0}]},
+            "weather": {"values": [
+                {"validTime": "2026-11-22T18:00:00+00:00/PT1H",
+                 "value": [{"weather": "thunderstorms", "coverage": "likely"}]},
+                {"validTime": "2026-11-22T19:00:00+00:00/PT1H",
+                 "value": [{"weather": "thunderstorms", "coverage": "slight_chance"}]}]},
+        }
+        h = grid_to_hourly(grid)["hourly"]
+        self.assertEqual(h["time"], ["2026-11-22T18:00", "2026-11-22T19:00"])
+        self.assertEqual(h["temperature_2m"], [32, 32])
+        self.assertAlmostEqual(h["wind_speed_10m"][0], 10)
+        self.assertAlmostEqual(h["rain"][0], 0.5)  # 1" over 2 hours, spread evenly
+        self.assertEqual(h["weather_code"], [95, 0])  # slight chance doesn't count
 
 
 if __name__ == "__main__":
