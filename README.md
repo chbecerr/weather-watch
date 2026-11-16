@@ -1,6 +1,6 @@
 # weather-watch
 
-Finds this week's NFL and FBS college football games and ranks them by how
+Finds this week's NFL, FBS and FCS football games and ranks them by how
 extreme the weather will be at the stadium during the game.
 
 ```
@@ -17,10 +17,10 @@ Pure Python standard library, no API keys. Network access needed to `site.api.es
 ## Usage
 
 ```bash
-python3 -m weather_watch                 # this week's outdoor NFL + FBS games
+python3 -m weather_watch                 # this week's outdoor NFL, FBS and FCS games
 python3 -m weather_watch --week next     # next week's (late-week games may have no forecast yet)
 python3 -m weather_watch --top 10        # just the 10 nastiest
-python3 -m weather_watch --league nfl    # nfl | cfb | all
+python3 -m weather_watch --league fcs    # nfl | cfb (FBS) | fcs | all
 python3 -m weather_watch --include-indoor --tz America/Chicago
 python3 -m weather_watch --json          # machine-readable, includes score breakdown
 ```
@@ -30,8 +30,9 @@ Or install it with `pip install .` and run `weather-watch`.
 ## How it works
 
 1. **Games**: ESPN's public scoreboard API (`site.api.espn.com`). FBS is
-   ESPN group 80. Weeks are ESPN's own (NFL Thursday to Monday-night games,
-   college Tuesday to Saturday). "This week" is ESPN's current week; once every
+   ESPN group 80 and FCS is group 81. A game ESPN lists under both (FBS vs FCS,
+   e.g. Wofford at Ole Miss) is shown once, as an FBS game. Weeks are ESPN's own
+   (NFL Thursday to Monday-night games, college Tuesday to Saturday). "This week" is ESPN's current week; once every
    game in it has been played (NFL on Tuesday and Wednesday) it moves on to the
    following week. On a Monday that means NFL's "this week" is just that night's
    game. Finished games are dropped.

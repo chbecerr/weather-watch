@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Weather Watch</title>
-  <meta name="description" content="This week's NFL and FBS games ranked by how extreme the weather is at the stadium.">
+  <meta name="description" content="This week's NFL, FBS and FCS games ranked by how extreme the weather is at the stadium.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8C%AA%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -12,7 +12,7 @@
   <header class="top">
     <div class="wrap">
       <h1>Weather Watch</h1>
-      <p class="tagline">This week's NFL and FBS games, ranked by how extreme the weather is at the stadium.</p>
+      <p class="tagline">This week's NFL, FBS and FCS games, ranked by how extreme the weather is at the stadium.</p>
       <p class="updated" id="updated" aria-live="polite">Loading…</p>
     </div>
   </header>
@@ -32,7 +32,8 @@
       <div class="seg" role="group" aria-label="League" id="league">
         <button type="button" data-v="all" aria-pressed="true">All</button>
         <button type="button" data-v="NFL" aria-pressed="false">NFL</button>
-        <button type="button" data-v="CFB" aria-pressed="false">College</button>
+        <button type="button" data-v="CFB" aria-pressed="false">FBS</button>
+        <button type="button" data-v="FCS" aria-pressed="false">FCS</button>
       </div>
       <label class="field">
         <span class="sr">Day</span>

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "weather-watch"
 version = "0.1.0"
-description = "Rank this week's NFL and FBS college football games by how extreme the stadium weather is."
+description = "Rank this week's NFL, FBS and FCS football games by how extreme the stadium weather is."
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = []

@@ -1,4 +1,4 @@
-"""weather-watch: rank this week's NFL + FBS games by how extreme the stadium weather is."""
+"""weather-watch: rank this week's NFL, FBS and FCS games by how extreme the stadium weather is."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from .history import load_previous
 from .site import UnhealthyData, build_payload, write_payload
 
 
-LEAGUE_NAMES = {"NFL": "NFL", "CFB": "College"}
+LEAGUE_NAMES = {"NFL": "NFL", "CFB": "FBS", "FCS": "FCS"}
 
 
 def build_report(leagues: list[str], weeks: tuple[str, ...] = ("this", "next")):
@@ -29,6 +29,7 @@ def build_report(leagues: list[str], weeks: tuple[str, ...] = ("this", "next")):
       hidden     {week: outdoor games left out because NWS has no forecast for them}
     """
     tagged: list[tuple[str, games_mod.Game]] = []
+    seen: set[str] = set()  # an FBS-vs-FCS game is listed by both leagues; keep the first
     week_info: dict[str, dict] = {w: {} for w in weeks}
     failures: list[Exception] = []
     for lg in leagues:
@@ -45,7 +46,11 @@ def build_report(leagues: list[str], weeks: tuple[str, ...] = ("this", "next")):
                 "first": wg.first.isoformat() if wg.first else None,
                 "last": wg.last.isoformat() if wg.last else None,
             }
-            tagged.extend((key, g) for g in wg.games)
+            for g in wg.games:
+                if g.espn_id in seen:
+                    continue
+                seen.add(g.espn_id)
+                tagged.append((key, g))
     if failures and len(failures) == len(leagues):
         raise failures[0]
 
@@ -159,7 +164,7 @@ def print_table(rows: list[dict], tz: ZoneInfo, week_info: dict, hidden: int = 0
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="weather-watch", description=__doc__)
-    p.add_argument("--league", choices=["nfl", "cfb", "all"], default="all")
+    p.add_argument("--league", choices=["nfl", "cfb", "fcs", "all"], default="all", help="cfb = FBS")
     p.add_argument(
         "--week", choices=["this", "next"], default="this",
         help="football week to show, using ESPN's weeks (default: this)",
@@ -175,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = p.parse_args(argv)
 
-    leagues = ["nfl", "cfb"] if args.league == "all" else [args.league]
+    leagues = ["nfl", "cfb", "fcs"] if args.league == "all" else [args.league]
     weeks = ("this", "next") if args.site_data else (args.week,)
     try:
         rows, week_info, hidden = build_report(leagues, weeks)

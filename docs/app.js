@@ -5,7 +5,8 @@ const TREND_MIN_MOVE = 5; // points; smaller moves are noise
 const FACTOR_LABELS = { wind: "Wind", cold: "Cold", heat: "Heat", rain: "Rain", snow: "Snow", storm: "Storm" };
 const $ = (id) => document.getElementById(id);
 
-const LEAGUE_NAMES = { NFL: "NFL", CFB: "College" };
+const LEAGUE_NAMES = { NFL: "NFL", CFB: "FBS", FCS: "FCS" };
+const LEAGUES = ["all", "NFL", "CFB", "FCS"];
 
 // Weather-event filters. These use their own, looser cutoffs on the forecast values (not the
 // score's flags, which only appear once a factor adds 5+ points), so e.g. 0.1" of snow counts.
@@ -202,7 +203,7 @@ function renderGame(g, maxScore) {
   }
 
   const place = g.venue.includes(g.location) ? g.venue : `${g.venue} · ${g.location}`;
-  const who = el("span", { class: "who" }, el("strong", { text: `${isFav(g) ? "★ " : ""}${g.league === "CFB" ? "🎓" : "🏈"} ${g.game}` }), el("small", { text: place }));
+  const who = el("span", { class: "who" }, el("strong", { text: `${isFav(g) ? "★ " : ""}${g.league === "NFL" ? "🏈" : "🎓"} ${g.game}` }), el("small", { text: place }));
 
   const when = el("span", { class: "when" },
     el("span", { text: dayFmt.format(g.kickoff) }), " ",
@@ -365,7 +366,7 @@ function readUrl() {
   const pick = (k, allowed) => (allowed.includes(u.get(k)) ? u.get(k) : null);
   const week = pick("week", ["this", "next"]);
   if (week) state.week = week;
-  const league = pick("league", ["all", "NFL", "CFB"]);
+  const league = pick("league", LEAGUES);
   if (league) state.league = league;
   const sort = pick("sort", Object.keys(SORTS));
   const dir = pick("dir", ["asc", "desc"]);
@@ -468,7 +469,7 @@ function showUpdated(generatedAt) {
 
 async function main() {
   const saved = store("league");
-  if (["all", "NFL", "CFB"].includes(saved)) state.league = saved;
+  if (LEAGUES.includes(saved)) state.league = saved;
   state.showAll = store("showAll") === true;
   state.mine = store("mine") === true;
   const savedFavs = store("favs");

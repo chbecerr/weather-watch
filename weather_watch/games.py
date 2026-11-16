@@ -1,4 +1,4 @@
-"""Fetch NFL and FBS games from ESPN's public scoreboard API."""
+"""Fetch NFL, FBS and FCS games from ESPN's public scoreboard API."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ LEAGUES = {
     # key: (path, extra query params)
     "nfl": ("nfl", {}),
     "cfb": ("college-football", {"groups": "80", "limit": "500"}),  # group 80 = FBS
+    "fcs": ("college-football", {"groups": "81", "limit": "500"}),  # group 81 = FCS
 }
 
 # Venues ESPN flags as outdoor that are effectively sheltered from the weather.

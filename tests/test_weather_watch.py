@@ -2,6 +2,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
+from weather_watch import cli as cli_mod
 from weather_watch import games as games_mod
 from weather_watch.games import parse_events
 from weather_watch import history
@@ -124,6 +125,33 @@ class NwsTests(unittest.TestCase):
         self.assertAlmostEqual(h["wind_speed_10m"][0], 10)
         self.assertAlmostEqual(h["rain"][0], 0.5)  # 1" over 2 hours, spread evenly
         self.assertEqual(h["weather_code"], [95, 0])  # slight chance doesn't count
+
+
+class LeagueMergeTests(unittest.TestCase):
+    """build_report with ESPN and the weather service replaced by stand-ins."""
+
+    def report(self, leagues, listings):
+        def weeks(league):
+            games = [parse_events(league, {"events": [ev(i, "pre") for i in ids]})
+                     for ids in [listings[league]]][0]
+            wg = games_mod.WeekGames(label="Week 12", games=games, first=None, last=None)
+            return games_mod.LeagueWeeks(this=wg, next=games_mod.WeekGames("Week 13", [], None, None))
+        hourly = {"time": ["2026-11-22T18:00"], "temperature_2m": [50], "apparent_temperature": [50], "rain": [0],
+                  "showers": [0], "snowfall": [0], "wind_speed_10m": [5], "wind_gusts_10m": [8], "weather_code": [1]}
+        with mock.patch.object(games_mod, "fetch_weeks", side_effect=weeks), \
+             mock.patch.object(weather_mod, "geocode_many", side_effect=lambda places: {p: (1.0, 2.0) for p in places}), \
+             mock.patch.object(nws_mod, "fetch_forecasts", return_value={(1.0, 2.0): {"hourly": hourly, "timezone": "America/Chicago"}}):
+            return cli_mod.build_report(leagues, ("this",))
+
+    def test_game_listed_by_both_college_leagues_appears_once_as_fbs(self):
+        rows, info, hidden = self.report(["cfb", "fcs"], {"cfb": ["shared", "fbs-only"], "fcs": ["shared", "fcs-only"]})
+        self.assertEqual(sorted(r["id"] for r in rows), ["cfb:fbs-only", "cfb:shared", "fcs:fcs-only"])
+        self.assertEqual(set(info["this"]), {"CFB", "FCS"})  # both leagues still get their own week label
+
+    def test_fcs_alone_keeps_its_games(self):
+        rows, _, _ = self.report(["fcs"], {"fcs": ["a", "shared"]})
+        self.assertEqual(sorted(r["id"] for r in rows), ["fcs:a", "fcs:shared"])
+        self.assertTrue(all(r["league"] == "FCS" for r in rows))
 
 
 class PrecipChanceTests(unittest.TestCase):
