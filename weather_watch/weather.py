@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -58,6 +58,7 @@ class GameWeather:
     snow_in: float
     weather_code: int
     precip_chance: float | None = None  # highest chance of precipitation (%) during the game
+    hours: list = field(default_factory=list)  # one dict per hour of the game window (see summarize_window)
 
     @property
     def conditions(self) -> str:
@@ -154,6 +155,25 @@ def summarize_window(forecast: dict, kickoff: datetime, hours: int = GAME_HOURS)
         vals = [h[name][i] for i in idx if h.get(name) and h[name][i] is not None]
         return vals or [0.0]
 
+    def at(name, i, default=None):
+        values = h.get(name)
+        value = values[i] if values and i < len(values) else None
+        return default if value is None else value
+
+    # The same hours the summary is built from, kept separate for an hour-by-hour view.
+    per_hour = [
+        {
+            "t": times[i] + "Z",  # UTC, e.g. 2026-11-22T18:00Z
+            "temp_f": round(at("temperature_2m", i, 0.0)),
+            "feels_f": round(at("apparent_temperature", i, at("temperature_2m", i, 0.0))),
+            "wind_mph": round(at("wind_speed_10m", i, 0.0)),
+            "gust_mph": round(max(at("wind_gusts_10m", i, 0.0), at("wind_speed_10m", i, 0.0))),
+            "rain_in": round(at("rain", i, 0.0) + at("showers", i, 0.0), 2),
+            "snow_in": round(at("snowfall", i, 0.0), 2),  # two decimals: a game total of 0.1" is only ~0.03" an hour
+            "chance": None if at("precip_probability", i) is None else round(at("precip_probability", i)),
+        }
+        for i in idx
+    ]
     codes = col("weather_code")
     chances = [
         h["precip_probability"][i]
@@ -170,4 +190,5 @@ def summarize_window(forecast: dict, kickoff: datetime, hours: int = GAME_HOURS)
         snow_in=sum(col("snowfall")),
         weather_code=int(max(codes)),  # WMO codes rise roughly with severity
         precip_chance=max(chances) if chances else None,
+        hours=per_hour,
     )

@@ -123,6 +123,21 @@ h1 { margin: 0; font-size: 1.6rem; letter-spacing: -0.01em; }
 .sev-moderate .num { color: var(--moderate); }
 .sev-severe .bar i { background: var(--severe); }
 .sev-severe .num { color: var(--severe); }
+/* Hour-by-hour table in a game's details */
+.timewrap { overflow-x: auto; }
+.timeline { border-collapse: separate; border-spacing: 4px; font-size: 0.85rem; width: 100%; max-width: 520px; table-layout: fixed; }
+.timeline caption { text-align: left; color: var(--muted); font-size: 0.85rem; padding-bottom: 2px; caption-side: top; }
+.timeline th { font-weight: 600; font-size: 0.78rem; color: var(--muted); text-align: center; }
+.timeline th[scope="row"] { text-align: left; width: 4.2em; }
+.timeline td.blank { width: 4.2em; padding: 0; }
+.timeline td:not(.blank) { text-align: center; padding: 4px 2px; border-radius: 6px; font-variant-numeric: tabular-nums; background: color-mix(in srgb, var(--line) 40%, transparent); }
+.timeline td small { display: block; color: var(--muted); font-size: 0.75rem; }
+.timeline td.t-wind { background: color-mix(in srgb, var(--c-wind) 20%, transparent); }
+.timeline td.t-cold { background: color-mix(in srgb, var(--c-cold) 20%, transparent); }
+.timeline td.t-heat { background: color-mix(in srgb, var(--c-heat) 20%, transparent); }
+.timeline td.t-wet { background: color-mix(in srgb, var(--c-rain) 20%, transparent); }
+.fine { font-size: 0.78rem; margin-top: 2px; }
+
 /* Weather-event filter chips */
 .events { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 0 0 12px; }
 .events-label { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }

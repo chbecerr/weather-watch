@@ -237,6 +237,48 @@ class OffseasonHealthTests(unittest.TestCase):
         self.assertEqual((report.hidden["this"], report.hidden_soon["this"]), (2, 1))
 
 
+class HourlyTests(unittest.TestCase):
+    def forecast(self):
+        times = [f"2026-11-22T{h:02d}:00" for h in range(16, 24)]
+        n = len(times)
+        return {"hourly": {
+            "time": times,
+            "temperature_2m": [40, 39, 38, 37, 36, 35, 34, 33],
+            "apparent_temperature": [32, 31, 30, 29, 28, 27, 26, 25],
+            "rain": [0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07],
+            "showers": [0.0] * n,
+            "snowfall": [0.0, 0.0, 0.14, 0.26, 0.0, 0.0, 0.0, 0.0],
+            "wind_speed_10m": [10, 12, 14, 16, 18, 20, 22, 24],
+            "wind_gusts_10m": [15, 11, 20, 25, 30, 35, 40, 45],  # the 17:00 gust (11) is below that hour's sustained wind (12)
+            "weather_code": [3] * n,
+            "precip_probability": [10, 10, 60, 60, None, None, None, None],
+        }}
+
+    def test_each_hour_of_the_game_window_is_kept_in_order(self):
+        w = summarize_window(self.forecast(), datetime(2026, 11, 22, 17, 30, tzinfo=timezone.utc))  # hours 17-20
+        self.assertEqual([h["t"] for h in w.hours], ["2026-11-22T17:00Z", "2026-11-22T18:00Z", "2026-11-22T19:00Z", "2026-11-22T20:00Z"])
+        self.assertEqual([h["temp_f"] for h in w.hours], [39, 38, 37, 36])
+        self.assertEqual([h["feels_f"] for h in w.hours], [31, 30, 29, 28])
+        self.assertEqual([h["wind_mph"] for h in w.hours], [12, 14, 16, 18])
+
+    def test_values_are_rounded_and_gusts_never_below_sustained_wind(self):
+        w = summarize_window(self.forecast(), datetime(2026, 11, 22, 17, 0, tzinfo=timezone.utc))
+        self.assertEqual([h["gust_mph"] for h in w.hours], [12, 20, 25, 30])  # 17:00 gust 11 is raised to the wind speed, 12
+        self.assertEqual([h["rain_in"] for h in w.hours], [0.01, 0.02, 0.03, 0.04])
+        self.assertEqual([h["snow_in"] for h in w.hours], [0.0, 0.14, 0.26, 0.0])
+
+    def test_missing_chance_stays_none_not_zero(self):
+        w = summarize_window(self.forecast(), datetime(2026, 11, 22, 19, 0, tzinfo=timezone.utc))  # hours 19-22
+        self.assertEqual([h["chance"] for h in w.hours], [60, None, None, None])
+
+    def test_hours_agree_with_the_summary(self):
+        w = summarize_window(self.forecast(), datetime(2026, 11, 22, 16, 0, tzinfo=timezone.utc))
+        self.assertEqual(max(h["wind_mph"] for h in w.hours), w.wind_mph)
+        self.assertEqual(min(h["feels_f"] for h in w.hours), w.feels_min_f)
+        self.assertEqual(round(sum(h["rain_in"] for h in w.hours), 2), round(w.rain_in, 2))
+        self.assertAlmostEqual(sum(h["snow_in"] for h in w.hours), w.snow_in, delta=0.02)  # small snow isn't rounded away
+
+
 class PrecipChanceTests(unittest.TestCase):
     def grid(self):
         return {

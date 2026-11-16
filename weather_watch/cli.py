@@ -112,6 +112,7 @@ def build_report(leagues: list[str], weeks: tuple[str, ...] = ("this", "next")) 
                 "rain_in": round(w.rain_in, 2),
                 "snow_in": round(w.snow_in, 1),
                 "precip_chance": None if w.precip_chance is None else round(w.precip_chance),
+                "hourly": w.hours,
                 "conditions": w.conditions,
             }
             if not g.time_known:

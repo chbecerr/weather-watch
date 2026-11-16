@@ -163,6 +163,34 @@ function sparkline(history) {
   return svg;
 }
 
+// Hour-by-hour table for the game window. Cells are shaded with the same cutoffs as the weather chips.
+const hourFmt = new Intl.DateTimeFormat(undefined, { hour: "numeric" });
+
+function timeline(hours) {
+  if (!Array.isArray(hours) || hours.length < 2) return null;
+  const hit = (h, key) => EVENTS.find((e) => e.key === key).test({
+    wind_mph: h.wind_mph, feels_like_min_f: h.feels_f, feels_like_max_f: h.feels_f,
+    rain_in: 0, snow_in: 0, conditions: "", precip_chance: h.chance,
+  });
+  const two = (main, sub) => [el("span", { text: main }), el("small", { text: sub || "\u00a0" })];
+  const row = (label, cellFor) => el("tr", null, el("th", { scope: "row", text: label }), hours.map(cellFor));
+  const table = el("table", { class: "timeline" },
+    el("caption", { text: "Hour by hour from kickoff" }),
+    el("thead", null, el("tr", null, el("td", { class: "blank" }), hours.map((h) => el("th", { scope: "col", text: hourFmt.format(new Date(h.t)) })))),
+    el("tbody", null,
+      row("Temp", (h) => el("td", { class: hit(h, "cold") ? "t-cold" : hit(h, "heat") ? "t-heat" : null }, two(`${h.temp_f}°`, `feels ${h.feels_f}°`))),
+      row("Wind", (h) => el("td", { class: hit(h, "wind") ? "t-wind" : null }, two(`${h.wind_mph} mph`, `gust ${h.gust_mph}`))),
+      row("Precip", (h) => {
+        const amount = h.snow_in >= 0.01 ? `${h.snow_in.toFixed(2)}″ snow` : h.rain_in >= 0.01 ? `${h.rain_in.toFixed(2)}″ rain` : "";
+        return el("td", { class: hit(h, "likely") ? "t-wet" : null }, two(h.chance == null ? "–" : `${h.chance}%`, amount));
+      })));
+  const wrap = el("div", { class: "timewrap" }, table);
+  if (hours.some((h) => h.chance != null)) {
+    wrap.append(el("p", { class: "muted fine", text: "Rain, snow and chance of precipitation are forecast in blocks of several hours, so they often look the same from hour to hour." }));
+  }
+  return wrap;
+}
+
 function severity(score) {
   return score >= 30 ? "sev-severe" : score >= 10 ? "sev-moderate" : "sev-calm";
 }
@@ -247,6 +275,8 @@ function renderDetail(g) {
   if (g.weather) {
     d.append(el("p", { class: "muted", text: `${g.weather.conditions}. Feels like ${g.weather.feels_like_min_f}° to ${g.weather.feels_like_max_f}° during the game.${g.weather.precip_chance != null ? ` Up to a ${g.weather.precip_chance}% chance of precipitation.` : ""}` }));
   }
+  const hourly = timeline(g.weather && g.weather.hourly);
+  if (hourly) d.append(hourly);
   if (g.trend) {
     const move = Math.abs(g.trend.delta) < 0.5 ? "unchanged" : `${g.trend.delta > 0 ? "up" : "down"} ${Math.abs(g.trend.delta).toFixed(1)}`;
     d.append(el("p", { text: `Score ${g.score.toFixed(1)} now, ${g.trend.prev.toFixed(1)} about ${g.trend.hours} hours ago (${move}).` }));
