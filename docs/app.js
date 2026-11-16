@@ -1,6 +1,7 @@
 "use strict";
 
 const STALE_HOURS = 12;
+const TREND_MIN_MOVE = 5; // points; smaller moves are noise
 const FACTOR_LABELS = { wind: "Wind", cold: "Cold", heat: "Heat", rain: "Rain", snow: "Snow", storm: "Storm" };
 const $ = (id) => document.getElementById(id);
 
@@ -99,6 +100,39 @@ function sorted(list) {
 
 // ---- rendering ----------------------------------------------------------
 
+function trendChip(tr) {
+  const up = tr.delta > 0;
+  const label = `${up ? "Up" : "Down"} ${Math.abs(tr.delta).toFixed(1)} points since ${tr.hours} hours ago (was ${tr.prev.toFixed(1)})`;
+  return el("span", { class: "trend " + (up ? "up" : "down"), title: label },
+    el("span", { "aria-hidden": "true", text: `${up ? "▲" : "▼"}${Math.round(Math.abs(tr.delta))}` }),
+    el("span", { class: "sr", text: label }));
+}
+
+function sparkline(history) {
+  const pts = (history || [])
+    .map(([t, v]) => [new Date(t).getTime(), v])
+    .filter(([t, v]) => Number.isFinite(t) && Number.isFinite(v));
+  if (pts.length < 2) return null;
+  const W = 220, H = 36, pad = 4;
+  const t0 = pts[0][0], t1 = pts[pts.length - 1][0];
+  const vmax = Math.max(10, ...pts.map((p) => p[1]));
+  const x = (t) => pad + (t1 === t0 ? 0 : ((t - t0) / (t1 - t0)) * (W - 2 * pad));
+  const y = (v) => H - pad - (v / vmax) * (H - 2 * pad);
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("class", "spark");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", `Score history, oldest to newest: ${pts.map((p) => p[1].toFixed(0)).join(", ")}`);
+  const path = document.createElementNS(NS, "path");
+  path.setAttribute("d", pts.map(([t, v], i) => `${i ? "L" : "M"}${x(t).toFixed(1)} ${y(v).toFixed(1)}`).join(" "));
+  const dot = document.createElementNS(NS, "circle");
+  const last = pts[pts.length - 1];
+  dot.setAttribute("cx", x(last[0]).toFixed(1)); dot.setAttribute("cy", y(last[1]).toFixed(1)); dot.setAttribute("r", "3");
+  svg.append(path, dot);
+  return svg;
+}
+
 function severity(score) {
   return score >= 30 ? "sev-severe" : score >= 10 ? "sev-moderate" : "sev-calm";
 }
@@ -120,6 +154,7 @@ function renderGame(g, maxScore) {
   const score = el("span", { class: "score " + (g.hasScore ? severity(g.score) : "noscore") });
   score.append(el("span", { class: "num", text: g.hasScore ? g.score.toFixed(1) : "–" }));
   if (g.hasScore) {
+    if (g.trend && Math.abs(g.trend.delta) >= TREND_MIN_MOVE) score.append(trendChip(g.trend));
     const pct = Math.max(2, Math.min(100, (g.score / maxScore) * 100));
     score.append(el("span", { class: "bar", "aria-hidden": "true" }, el("i", { style: `width:${pct}%` })));
   }
@@ -164,6 +199,12 @@ function renderDetail(g) {
   if (g.weather) {
     d.append(el("p", { class: "muted", text: `${g.weather.conditions}. Feels like ${g.weather.feels_like_min_f}° to ${g.weather.feels_like_max_f}° during the game.` }));
   }
+  if (g.trend) {
+    const move = Math.abs(g.trend.delta) < 0.5 ? "unchanged" : `${g.trend.delta > 0 ? "up" : "down"} ${Math.abs(g.trend.delta).toFixed(1)}`;
+    d.append(el("p", { text: `Score ${g.score.toFixed(1)} now, ${g.trend.prev.toFixed(1)} about ${g.trend.hours} hours ago (${move}).` }));
+  }
+  const spark = sparkline(g.history);
+  if (spark) d.append(el("div", { class: "sparkwrap" }, el("span", { class: "muted", text: "Score history" }), spark));
   const entries = Object.entries(g.factors || {}).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
   if (entries.length) {
     const top = Math.max(...entries.map(([, v]) => v));

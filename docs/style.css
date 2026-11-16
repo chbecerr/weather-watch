@@ -121,6 +121,14 @@ h1 { margin: 0; font-size: 1.6rem; letter-spacing: -0.01em; }
 .sev-moderate .num { color: var(--moderate); }
 .sev-severe .bar i { background: var(--severe); }
 .sev-severe .num { color: var(--severe); }
+/* Score movement since about a day ago */
+.trend { font-size: 0.75rem; font-weight: 700; padding: 1px 7px; border-radius: 99px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.trend.up { color: var(--severe); background: color-mix(in srgb, var(--severe) 14%, transparent); }
+.trend.down { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.sparkwrap { display: flex; align-items: center; gap: 10px; font-size: 0.85rem; }
+.spark { width: 220px; max-width: 60%; height: 36px; }
+.spark path { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.spark circle { fill: var(--accent); }
 .noscore .num { color: var(--muted); font-weight: 500; }
 .when { grid-column: 2 / 3; grid-row: 1; text-align: right; font-size: 0.875rem; color: var(--muted); white-space: nowrap; }
 .who { grid-column: 1 / 3; display: flex; flex-direction: column; }

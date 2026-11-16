@@ -50,11 +50,17 @@ jobs:
       - name: Run tests
         run: python -m unittest
 
+      - uses: actions/configure-pages@v5
+        id: pages
+
+      # The live site's data file carries each game's score history; fetch it so
+      # this run can add to it. On the very first deploy there is nothing yet.
+      - name: Fetch previous data
+        run: curl -fsSL --retry 3 --retry-delay 2 "${{ steps.pages.outputs.base_url }}/data.json" -o previous-data.json || echo "No previous data yet; starting fresh history."
+
       # Fails (and keeps the previous site) if the forecast source is down.
       - name: Build data file
-        run: python -m weather_watch --site-data docs/data.json
-
-      - uses: actions/configure-pages@v5
+        run: python -m weather_watch --site-data docs/data.json --previous previous-data.json
 
       - uses: actions/upload-pages-artifact@v3
         with:

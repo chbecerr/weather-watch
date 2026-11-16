@@ -1,9 +1,10 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 from weather_watch import games as games_mod
 from weather_watch.games import parse_events
+from weather_watch import history
 from weather_watch.site import UnhealthyData, build_payload
 from weather_watch import weather as weather_mod
 from weather_watch.nws import grid_to_hourly, parse_valid_time
@@ -150,6 +151,71 @@ class GeocodeTests(unittest.TestCase):
     def test_abroad_requires_matching_country(self):
         self.assertEqual(self.geocode("Mexico City", "", "Mexico"), (19.4, -99.1))
         self.assertIsNone(self.geocode("Mexico City", "", "Canada"))
+
+
+T0 = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
+
+
+def iso(hours_ago):
+    return (T0 - timedelta(hours=hours_ago)).isoformat(timespec="seconds")
+
+
+class HistoryTests(unittest.TestCase):
+    def test_extend_appends_and_prunes_old_samples(self):
+        old = [[iso(24 * 9), 5.0], [iso(24), 10.0]]
+        out = history.extend(old, 30.0, T0)
+        self.assertEqual([v for _, v in out], [10.0, 30.0])  # the 9-day-old sample is gone
+
+    def test_extend_replaces_a_sample_from_a_rerun_within_two_hours(self):
+        out = history.extend([[iso(1), 10.0]], 12.0, T0)
+        self.assertEqual([v for _, v in out], [12.0])
+
+    def test_extend_ignores_garbage_samples(self):
+        out = history.extend([["not a date", 1], [iso(6), 2.0]], 3.0, T0)
+        self.assertEqual([v for _, v in out], [2.0, 3.0])
+
+    def test_trend_compares_to_about_a_day_ago(self):
+        samples = [[iso(48), 1.0], [iso(24), 12.3], [iso(9), 20.0], [iso(3), 30.0], [iso(0), 34.4]]
+        t = history.trend(samples, T0)
+        self.assertEqual(t, {"delta": 22.1, "hours": 24, "prev": 12.3})  # not the 48h-old sample
+
+    def test_trend_uses_oldest_available_when_under_a_day_of_history(self):
+        t = history.trend([[iso(9), 10.0], [iso(3), 11.0], [iso(0), 40.0]], T0)
+        self.assertEqual((t["hours"], t["delta"]), (9, 30.0))
+
+    def test_no_trend_without_a_baseline_old_enough(self):
+        self.assertIsNone(history.trend([[iso(0), 5.0]], T0))
+        self.assertIsNone(history.trend([[iso(3), 5.0], [iso(0), 9.0]], T0))
+
+    def test_load_previous_reads_history_and_tolerates_junk(self):
+        import json, os, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            good = os.path.join(d, "data.json")
+            with open(good, "w") as fh:
+                json.dump({"games": [{"id": "NFL:1", "history": [[iso(3), 4.0]]}, {"id": "NFL:2"}]}, fh)
+            self.assertEqual(history.load_previous(good), {"NFL:1": [[iso(3), 4.0]]})
+            bad = os.path.join(d, "bad.json")
+            with open(bad, "w") as fh:
+                fh.write("{oops")
+            self.assertEqual(history.load_previous(bad), {})
+        self.assertEqual(history.load_previous(None), {})
+        self.assertEqual(history.load_previous("/nonexistent/data.json"), {})
+
+    def test_apply_skips_games_without_a_forecast(self):
+        rows = [
+            {"id": "NFL:1", "weather": {"temp_f": 1}, "score": 30.0},
+            {"id": "NFL:2", "weather": None, "score": 0.0},
+        ]
+        history.apply(rows, {"NFL:1": [[iso(24), 10.0]]}, T0)
+        self.assertEqual(rows[0]["trend"]["delta"], 20.0)
+        self.assertNotIn("history", rows[1])
+
+    def test_payload_adds_history_only_when_given_previous(self):
+        row = {"id": "NFL:1", "week": "this", "indoor": False, "weather": {"temp_f": 1}, "score": 5.0}
+        out = build_payload([dict(row)], {}, {"this": 0}, now=T0)
+        self.assertNotIn("history", out["games"][0])
+        out = build_payload([dict(row)], {}, {"this": 0}, now=T0, previous={})
+        self.assertEqual(len(out["games"][0]["history"]), 1)
 
 
 class SiteDataTests(unittest.TestCase):

@@ -13,6 +13,7 @@ from . import nws
 from . import weather as wx
 from .http import NetworkError
 from .scoring import score
+from .history import load_previous
 from .site import UnhealthyData, build_payload, write_payload
 
 
@@ -57,6 +58,7 @@ def build_report(leagues: list[str], weeks: tuple[str, ...] = ("this", "next")):
     hidden = {w: 0 for w in weeks}
     for key, g in tagged:
         row = {
+            "id": f"{g.league}:{g.espn_id}",
             "week": key,
             "week_label": week_info[key][g.league.upper()]["label"],
             "league": g.league.upper(),
@@ -164,6 +166,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--tz", default="America/New_York", help="timezone for kickoff times")
     p.add_argument("--json", action="store_true", help="emit JSON instead of a table")
     p.add_argument("--site-data", metavar="PATH", help="write the website's data file (all games) to PATH")
+    p.add_argument(
+        "--previous", metavar="PATH",
+        help="with --site-data: the previously published data file, used to carry score history forward",
+    )
     args = p.parse_args(argv)
 
     leagues = ["nfl", "cfb"] if args.league == "all" else [args.league]
@@ -181,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.site_data:
         try:
-            payload = build_payload(rows, week_info, hidden)
+            payload = build_payload(rows, week_info, hidden, previous=load_previous(args.previous))
         except UnhealthyData as err:
             print(f"error: not writing {args.site_data}: {err}", file=sys.stderr)
             return 1

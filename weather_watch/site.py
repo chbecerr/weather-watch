@@ -7,13 +7,19 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import history
+
 
 class UnhealthyData(Exception):
     """The report looks broken; don't publish it over a good earlier one."""
 
 
 def build_payload(
-    rows: list[dict], week_info: dict, hidden: dict, now: datetime | None = None
+    rows: list[dict],
+    week_info: dict,
+    hidden: dict,
+    now: datetime | None = None,
+    previous: dict | None = None,
 ) -> dict:
     """Wrap report rows for the website, refusing obviously broken reports.
 
@@ -28,6 +34,8 @@ def build_payload(
             "(is api.weather.gov or the city lookup down?)"
         )
     now = now or datetime.now(timezone.utc)
+    if previous is not None:  # even an empty dict starts a history
+        history.apply(rows, previous, now)
     return {
         "generated_at": now.astimezone(timezone.utc).isoformat(timespec="seconds"),
         "source": "US National Weather Service",
