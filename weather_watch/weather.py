@@ -12,6 +12,8 @@ from datetime import datetime, timedelta, timezone
 from .http import get_json
 
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
+# Bumped from geocode.json when matching became strict, so old lenient matches are discarded.
+GEOCODE_CACHE = "geocode-v2.json"
 
 GAME_HOURS = 4  # kickoff hour + 3 more ~= a football game
 
@@ -62,42 +64,43 @@ class GameWeather:
 
 
 def geocode(city: str, state: str, country: str) -> tuple[float, float] | None:
+    """Coordinates for a venue's city, or None if we can't be sure we have the right place.
+
+    Many US towns share a name (Columbia, Lincoln, Athens...), so a result is only
+    accepted if its state (or, abroad, its country) matches the venue's. A game we
+    can't place is left out rather than shown with another town's weather.
+    """
     if not city:
         return None
     # The geocoder only matches place names, so "Chestnut Hill" not "Chestnut Hill, MA".
     data = get_json(GEOCODE_URL, {"name": city, "count": 20, "language": "en"})
     results = data.get("results") or []
-    if not results:
-        return None
-    is_us = country in ("", "USA", "United States")
-    state_name = US_STATES.get(state.upper(), state) if state else ""
-
-    def pick(pred):
-        return next((r for r in results if pred(r)), None)
-
-    best = None
-    if is_us:
-        best = pick(lambda r: r.get("country_code") == "US" and r.get("admin1") == state_name)
-        best = best or pick(lambda r: r.get("country_code") == "US")
+    if country in ("", "USA", "United States"):
+        state_name = US_STATES.get(state.upper(), state) if state else ""
+        if not state_name:
+            return None
+        match = next(
+            (r for r in results if r.get("country_code") == "US" and r.get("admin1") == state_name),
+            None,
+        )
     else:
-        best = pick(lambda r: (r.get("country") or "").lower() == country.lower())
-    best = best or results[0]
-    return best["latitude"], best["longitude"]
+        match = next((r for r in results if (r.get("country") or "").lower() == country.lower()), None)
+    return (match["latitude"], match["longitude"]) if match else None
 
 
-def _cache_path(name: str = "geocode.json") -> Path:
+def _cache_path(name: str = GEOCODE_CACHE) -> Path:
     base = os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache"
     return Path(base) / "weather-watch" / name
 
 
-def load_cache(name: str = "geocode.json") -> dict:
+def load_cache(name: str = GEOCODE_CACHE) -> dict:
     try:
         return json.loads(_cache_path(name).read_text())
     except (OSError, ValueError):
         return {}
 
 
-def save_cache(cache: dict, name: str = "geocode.json") -> None:
+def save_cache(cache: dict, name: str = GEOCODE_CACHE) -> None:
     try:
         path = _cache_path(name)
         path.parent.mkdir(parents=True, exist_ok=True)

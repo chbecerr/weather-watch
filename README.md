@@ -35,8 +35,10 @@ Or install it with `pip install .` and run `weather-watch`.
    game in it has been played (NFL on Tuesday and Wednesday) it moves on to the
    following week. On a Monday that means NFL's "this week" is just that night's
    game. Finished games are dropped.
-2. **Location**: the venue city is geocoded with Open-Meteo's geocoder and
-   cached in `~/.cache/weather-watch/geocode.json`, so later runs skip this step.
+2. **Location**: the venue city is geocoded with Open-Meteo's geocoder (a result is only
+   accepted if its state matches the venue's, so a same-named town elsewhere can't be
+   picked by mistake; games it can't place are left out) and
+   cached in `~/.cache/weather-watch/geocode-v2.json`, so later runs skip this step.
 3. **Weather**: hourly forecasts from the US National Weather Service
    (`api.weather.gov`, no key needed), which covers US venues about 7 days
    ahead. The tool looks at the 4 hours starting at kickoff. Games with no

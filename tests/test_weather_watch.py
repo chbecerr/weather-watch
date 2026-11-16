@@ -5,6 +5,7 @@ from unittest import mock
 from weather_watch import games as games_mod
 from weather_watch.games import parse_events
 from weather_watch.site import UnhealthyData, build_payload
+from weather_watch import weather as weather_mod
 from weather_watch.nws import grid_to_hourly, parse_valid_time
 from weather_watch.scoring import score
 from weather_watch.weather import GameWeather, summarize_window
@@ -121,6 +122,34 @@ class NwsTests(unittest.TestCase):
         self.assertAlmostEqual(h["wind_speed_10m"][0], 10)
         self.assertAlmostEqual(h["rain"][0], 0.5)  # 1" over 2 hours, spread evenly
         self.assertEqual(h["weather_code"], [95, 0])  # slight chance doesn't count
+
+
+class GeocodeTests(unittest.TestCase):
+    RESULTS = {"results": [
+        {"name": "Columbia", "country_code": "US", "country": "United States", "admin1": "Missouri", "latitude": 38.95, "longitude": -92.33},
+        {"name": "Columbia", "country_code": "US", "country": "United States", "admin1": "South Carolina", "latitude": 34.0, "longitude": -81.03},
+        {"name": "Mexico City", "country_code": "MX", "country": "Mexico", "admin1": "CDMX", "latitude": 19.4, "longitude": -99.1},
+    ]}
+
+    def geocode(self, *place, payload=None):
+        with mock.patch.object(weather_mod, "get_json", return_value=self.RESULTS if payload is None else payload):
+            return weather_mod.geocode(*place)
+
+    def test_picks_the_town_in_the_venues_state(self):
+        self.assertEqual(self.geocode("Columbia", "SC", "USA"), (34.0, -81.03))
+        self.assertEqual(self.geocode("Columbia", "MO", "USA"), (38.95, -92.33))
+
+    def test_refuses_a_same_named_town_in_the_wrong_state(self):
+        self.assertIsNone(self.geocode("Columbia", "TN", "USA"))
+
+    def test_refuses_when_state_is_unknown_or_city_missing(self):
+        self.assertIsNone(self.geocode("Columbia", "", "USA"))
+        self.assertIsNone(self.geocode("", "SC", "USA"))
+        self.assertIsNone(self.geocode("Nowhere", "SC", "USA", payload={}))
+
+    def test_abroad_requires_matching_country(self):
+        self.assertEqual(self.geocode("Mexico City", "", "Mexico"), (19.4, -99.1))
+        self.assertIsNone(self.geocode("Mexico City", "", "Canada"))
 
 
 class SiteDataTests(unittest.TestCase):
