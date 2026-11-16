@@ -143,7 +143,11 @@ def print_table(rows: list[dict], tz: ZoneInfo) -> None:
             f"{i:>3}  {sc}  {r['league']:<3}  {r['game'][:11]:<11}  "
             f"{_fmt_kickoff(r['kickoff_utc'], tz, r['time_tba']):<16}  {wx_cols}  {venue}"
         )
+    names = {"open-meteo": "Open-Meteo", "nws": "US National Weather Service"}
+    used = sorted({names.get(r["source"], r["source"]) for r in rows if r["source"]})
     print("\nTemp = at kickoff; Feel = coldest feels-like during the game; Wind = max sustained g gust (mph).")
+    if used:
+        print(f"Forecast source: {' + '.join(used)}")
 
 
 def main(argv: list[str] | None = None) -> int:
