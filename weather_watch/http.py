@@ -12,6 +12,10 @@ import urllib.request
 USER_AGENT = "weather-watch/0.1"
 
 
+class NetworkError(Exception):
+    """A request failed after all retries; the message names the host."""
+
+
 def get_json(url: str, params: dict | None = None, retries: int = 3, timeout: float = 20.0):
     if params:
         url = f"{url}?{urllib.parse.urlencode(params, safe=',')}"
@@ -34,5 +38,6 @@ def get_json(url: str, params: dict | None = None, retries: int = 3, timeout: fl
         except (urllib.error.URLError, TimeoutError) as err:
             last_err = err
         time.sleep(1.5 * (attempt + 1))
-    assert last_err is not None
-    raise last_err
+    host = urllib.parse.urlsplit(url).hostname
+    reason = getattr(last_err, "reason", last_err)
+    raise NetworkError(f"couldn't reach {host} after {retries} tries: {reason}") from last_err

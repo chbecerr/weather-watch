@@ -10,16 +10,21 @@ from zoneinfo import ZoneInfo
 
 from . import games as games_mod
 from . import weather as wx
+from .http import NetworkError
 from .scoring import score
 
 
 def build_report(leagues: list[str], days: int) -> list[dict]:
     games: list[games_mod.Game] = []
+    failures: list[Exception] = []
     for lg in leagues:
         try:
             games.extend(games_mod.fetch_games(lg, days=days))
         except Exception as err:  # one league failing shouldn't sink the other
+            failures.append(err)
             print(f"warning: couldn't load {lg.upper()} schedule: {err}", file=sys.stderr)
+    if failures and len(failures) == len(leagues):
+        raise failures[0]
 
     outdoor = [g for g in games if not g.indoor]
     places = {(g.city, g.state, g.country) for g in outdoor}
@@ -128,7 +133,16 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     leagues = ["nfl", "cfb"] if args.league == "all" else [args.league]
-    rows = build_report(leagues, days=min(max(args.days, 1), 16))
+    try:
+        rows = build_report(leagues, days=min(max(args.days, 1), 16))
+    except NetworkError as err:
+        print(f"error: {err}", file=sys.stderr)
+        print(
+            "Check that this computer can open HTTPS sites (VPN, firewall, proxy or\n"
+            "antivirus 'HTTPS scanning' can block or stall connections).",
+            file=sys.stderr,
+        )
+        return 1
     if not args.include_indoor:
         rows = [r for r in rows if not r["indoor"]]
     if args.top:
