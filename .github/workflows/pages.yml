@@ -8,7 +8,9 @@ on:
     - cron: "17 */3 * * *" # every 3 hours (minute 17 avoids the busy top of the hour)
   workflow_dispatch: # "Run workflow" button in the Actions tab
   push:
-    branches: [main]
+    # The repo's default branch is currently the Claude work branch; "main" is
+    # listed so this keeps working if the branch is renamed.
+    branches: [main, "claude/weather-watch-football-u7xc7p"]
     paths:
       - "docs/**"
       - "weather_watch/**"
