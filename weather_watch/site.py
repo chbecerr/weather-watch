@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import history
+
+
+SOON_DAYS = 5  # the Weather Service looks ~7 days ahead; inside this, a missing forecast is a problem
 
 
 class UnhealthyData(Exception):
@@ -20,20 +23,32 @@ def build_payload(
     hidden: dict,
     now: datetime | None = None,
     previous: dict | None = None,
+    hidden_soon: dict | None = None,
 ) -> dict:
     """Wrap report rows for the website, refusing obviously broken reports.
 
-    If this week has outdoor games but none of them got a forecast, the weather
-    service failed; publishing that would blank the site.
+    If games that kick off soon enough to have a forecast all lack one, the weather
+    service failed; publishing that would blank the site. Games months away (the
+    offseason, or a distant bowl game) legitimately have no forecast and don't count.
+    `hidden_soon` is the count of such near-term games; without it, every game left
+    out counts.
     """
-    shown = sum(1 for r in rows if r["week"] == "this" and not r["indoor"])
-    left_out = hidden.get("this", 0)
+    now = now or datetime.now(timezone.utc)
+    cutoff = now + timedelta(days=SOON_DAYS)
+
+    def soon(row):
+        try:
+            return datetime.fromisoformat(row["kickoff_utc"]) <= cutoff
+        except (KeyError, TypeError, ValueError):
+            return True
+
+    shown = sum(1 for r in rows if r["week"] == "this" and not r["indoor"] and soon(r))
+    left_out = (hidden_soon if hidden_soon is not None else hidden).get("this", 0)
     if left_out and not shown:
         raise UnhealthyData(
-            f"none of this week's {left_out} outdoor games got a forecast "
+            f"none of this week's {left_out} near-term outdoor games got a forecast "
             "(is api.weather.gov or the city lookup down?)"
         )
-    now = now or datetime.now(timezone.utc)
     if previous is not None:  # even an empty dict starts a history
         history.apply(rows, previous, now)
     return {

@@ -117,8 +117,18 @@ class LeagueWeeks:
 _SEASON_LABELS = {1: "Preseason Week", 2: "Week"}
 
 
-def _label(season_type: int, week: int) -> str:
+def _label(league: str, season_type: int, week: int, calendar: list | None = None) -> str:
     if season_type == 3:
+        # ESPN names each NFL round ("Wild Card", "Super Bowl") in its calendar. Its college
+        # feed lumps every bowl and playoff game into one "week" it calls "Bowls", which would
+        # be wrong for FCS, so college just says "Postseason".
+        if league == "nfl":
+            for phase in calendar or []:
+                if str(phase.get("value")) != "3":
+                    continue
+                for entry in phase.get("entries") or []:
+                    if str(entry.get("value")) == str(week) and entry.get("label"):
+                        return entry["label"]
         return "Postseason"
     return f"{_SEASON_LABELS.get(season_type, 'Week')} {week}"
 
@@ -149,10 +159,10 @@ def _following(league: str, season_type: int, week: int) -> tuple[tuple[int, int
     return (st, wk), []
 
 
-def _week(season_type: int | None, week: int | None, all_games: list[Game], label: str | None = None) -> WeekGames:
+def _week(label: str, all_games: list[Game]) -> WeekGames:
     times = [g.kickoff for g in all_games]
     return WeekGames(
-        label=label or _label(season_type, week),
+        label=label,
         games=[g for g in all_games if g.status != "post"],
         first=min(times) if times else None,
         last=max(times) if times else None,
@@ -170,11 +180,12 @@ def fetch_weeks(league: str) -> LeagueWeeks:
     week = (current.get("week") or {}).get("number")
     season_type = (current.get("season") or {}).get("type")
     current_games = parse_events(league, current)
+    calendar = ((current.get("leagues") or [{}])[0]).get("calendar") or []
 
     if week is None or season_type is None:  # unexpected payload: show what's unfinished
         return LeagueWeeks(
-            this=_week(None, None, current_games, label="This week"),
-            next=_week(None, None, [], label="Next week"),
+            this=_week("This week", current_games),
+            next=_week("Next week", []),
         )
 
     if any(g.status != "post" for g in current_games):
@@ -183,6 +194,6 @@ def fetch_weeks(league: str) -> LeagueWeeks:
         this_key, this_games = _following(league, season_type, week)
     next_key, next_games = _following(league, *this_key)
     return LeagueWeeks(
-        this=_week(*this_key, this_games),
-        next=_week(*next_key, next_games),
+        this=_week(_label(league, *this_key, calendar), this_games),
+        next=_week(_label(league, *next_key, calendar), next_games),
     )

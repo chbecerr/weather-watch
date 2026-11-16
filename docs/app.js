@@ -413,9 +413,11 @@ function dateRange(first, last) {
 
 function renderWeekLabel() {
   const info = state.info[state.week] || {};
-  const parts = Object.entries(info).map(([lg, w]) =>
-    `${LEAGUE_NAMES[lg] || lg} ${w.label}${w.first ? ` (${dateRange(w.first, w.last)})` : ""}`);
-  $("weeklabel").textContent = parts.join(" · ") + (state.autoNext ? ". Nothing left this week, so this is next week." : "");
+  // A league with no games scheduled (e.g. the offseason) has no dates; leave it out of the label.
+  const parts = Object.entries(info).filter(([, w]) => w.first).map(([lg, w]) =>
+    `${LEAGUE_NAMES[lg] || lg} ${w.label} (${dateRange(w.first, w.last)})`);
+  $("weeklabel").textContent = (parts.length ? parts.join(" · ") : "No games scheduled right now")
+    + (state.autoNext ? ". Nothing left this week, so this is next week." : "");
 }
 
 function setupControls() {

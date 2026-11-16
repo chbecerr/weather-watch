@@ -144,14 +144,97 @@ class LeagueMergeTests(unittest.TestCase):
             return cli_mod.build_report(leagues, ("this",))
 
     def test_game_listed_by_both_college_leagues_appears_once_as_fbs(self):
-        rows, info, hidden = self.report(["cfb", "fcs"], {"cfb": ["shared", "fbs-only"], "fcs": ["shared", "fcs-only"]})
+        rows, info, hidden, _ = self.report(["cfb", "fcs"], {"cfb": ["shared", "fbs-only"], "fcs": ["shared", "fcs-only"]})
         self.assertEqual(sorted(r["id"] for r in rows), ["cfb:fbs-only", "cfb:shared", "fcs:fcs-only"])
         self.assertEqual(set(info["this"]), {"CFB", "FCS"})  # both leagues still get their own week label
 
     def test_fcs_alone_keeps_its_games(self):
-        rows, _, _ = self.report(["fcs"], {"fcs": ["a", "shared"]})
+        rows, _, _, _ = self.report(["fcs"], {"fcs": ["a", "shared"]})
         self.assertEqual(sorted(r["id"] for r in rows), ["fcs:a", "fcs:shared"])
         self.assertTrue(all(r["league"] == "FCS" for r in rows))
+
+
+class PostseasonTests(unittest.TestCase):
+    CALENDAR = [
+        {"label": "Regular Season", "value": "2", "entries": [{"label": "Week 18", "value": "18"}]},
+        {"label": "Postseason", "value": "3", "entries": [
+            {"label": "Wild Card", "value": "1"}, {"label": "Divisional Round", "value": "2"},
+            {"label": "Conference Championship", "value": "3"}, {"label": "Pro Bowl", "value": "4"},
+            {"label": "Super Bowl", "value": "5"}]},
+    ]
+
+    def current(self, week, season_type, events):
+        return {"week": {"number": week}, "season": {"type": season_type}, "events": events,
+                "leagues": [{"calendar": self.CALENDAR}]}
+
+    def test_nfl_rounds_are_named_from_espns_calendar(self):
+        current = self.current(18, 2, [ev("a", "post")])
+        weeks = {(3, 1): [ev("wc", "pre")], (3, 2): [ev("div", "pre")]}
+        with mock.patch.object(games_mod, "_fetch", fake_espn(current, weeks)):
+            lw = games_mod.fetch_weeks("nfl")
+        self.assertEqual((lw.this.label, ids(lw.this)), ("Wild Card", ["wc"]))
+        self.assertEqual((lw.next.label, ids(lw.next)), ("Divisional Round", ["div"]))
+
+    def test_pro_bowl_gap_is_stepped_over_to_the_super_bowl(self):
+        current = self.current(3, 3, [ev("cc", "post")])
+        weeks = {(3, 5): [ev("sb", "pre")]}  # nothing published for week 4 (Pro Bowl)
+        with mock.patch.object(games_mod, "_fetch", fake_espn(current, weeks)):
+            lw = games_mod.fetch_weeks("nfl")
+        self.assertEqual((lw.this.label, ids(lw.this)), ("Super Bowl", ["sb"]))
+
+    def test_college_postseason_is_one_bucket_called_postseason(self):
+        # ESPN's college feed puts every bowl and playoff game in postseason "week 1" and calls it
+        # "Bowls", which is wrong for FCS, so we don't use that label.
+        current = self.current(15, 2, [ev("cc", "post")])
+        weeks = {(3, 1): [ev("bowl1", "pre"), ev("bowl2", "pre")]}
+        for league in ("cfb", "fcs"):
+            with mock.patch.object(games_mod, "_fetch", fake_espn(current, weeks)):
+                lw = games_mod.fetch_weeks(league)
+            self.assertEqual((lw.this.label, ids(lw.this)), ("Postseason", ["bowl1", "bowl2"]), league)
+            self.assertEqual((lw.next.label, lw.next.games), ("Postseason", []), league)  # nothing after the bucket
+
+    def test_after_the_last_game_both_weeks_are_empty_not_an_error(self):
+        current = self.current(5, 3, [ev("sb", "post")])
+        with mock.patch.object(games_mod, "_fetch", fake_espn(current, {})):
+            lw = games_mod.fetch_weeks("nfl")
+        self.assertEqual((lw.this.games, lw.next.games), ([], []))
+
+
+class OffseasonHealthTests(unittest.TestCase):
+    NOW = datetime(2026, 2, 20, 12, 0, tzinfo=timezone.utc)
+
+    def row(self, days_out, week="this"):
+        when = self.NOW + timedelta(days=days_out)
+        return {"week": week, "indoor": False, "weather": {"temp_f": 40}, "kickoff_utc": when.isoformat()}
+
+    def test_games_months_away_with_no_forecast_are_not_an_outage(self):
+        # Offseason: this week's games are far off, nothing could have a forecast, so nothing is "hidden soon".
+        out = build_payload([], {}, {"this": 14}, now=self.NOW, hidden_soon={"this": 0})
+        self.assertEqual(out["hidden"], {"this": 14})
+
+    def test_near_term_games_all_missing_forecasts_is_an_outage(self):
+        with self.assertRaises(UnhealthyData):
+            build_payload([], {}, {"this": 14}, now=self.NOW, hidden_soon={"this": 3})
+
+    def test_a_far_out_row_does_not_vouch_for_a_broken_forecast_source(self):
+        # A game 20 days out can't have a forecast, so having one proves nothing about today's near-term games.
+        with self.assertRaises(UnhealthyData):
+            build_payload([self.row(20)], {}, {"this": 2}, now=self.NOW, hidden_soon={"this": 2})
+
+    def test_one_working_near_term_forecast_is_enough(self):
+        build_payload([self.row(2)], {}, {"this": 5}, now=self.NOW, hidden_soon={"this": 4})
+
+    def test_report_counts_only_near_term_games_as_hidden_soon(self):
+        far, near = "2099-01-01T00:00Z", "2020-01-01T00:00Z"  # far future / long past: independent of today's date
+        def weeks(league):
+            games = parse_events(league, {"events": [ev("far", "pre", far), ev("near", "pre", near)]})
+            return games_mod.LeagueWeeks(this=games_mod.WeekGames("Week 1", games, None, None),
+                                         next=games_mod.WeekGames("Week 2", [], None, None))
+        with mock.patch.object(games_mod, "fetch_weeks", side_effect=weeks), \
+             mock.patch.object(weather_mod, "geocode_many", side_effect=lambda places: {p: (1.0, 2.0) for p in places}), \
+             mock.patch.object(nws_mod, "fetch_forecasts", return_value={}):  # the forecast source returns nothing
+            report = cli_mod.build_report(["nfl"], ("this",))
+        self.assertEqual((report.hidden["this"], report.hidden_soon["this"]), (2, 1))
 
 
 class PrecipChanceTests(unittest.TestCase):

@@ -5,7 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
+from typing import NamedTuple
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from . import games as games_mod
@@ -14,20 +15,24 @@ from . import weather as wx
 from .http import NetworkError
 from .scoring import score
 from .history import load_previous
-from .site import UnhealthyData, build_payload, write_payload
+from .site import SOON_DAYS, UnhealthyData, build_payload, write_payload
 
 
 LEAGUE_NAMES = {"NFL": "NFL", "CFB": "FBS", "FCS": "FCS"}
 
 
-def build_report(leagues: list[str], weeks: tuple[str, ...] = ("this", "next")):
-    """Rows for the requested weeks, plus week labels and counts of games left out.
+FORECAST_SAFE_DAYS = SOON_DAYS  # the Weather Service looks ~7 days ahead; inside this, a missing forecast is a problem
 
-    Returns (rows, week_info, hidden):
-      rows       games with a forecast (and indoor games), most extreme first
-      week_info  {week: {league: {"label", "first", "last"}}}
-      hidden     {week: outdoor games left out because NWS has no forecast for them}
-    """
+
+class Report(NamedTuple):
+    rows: list[dict]  # games with a forecast (and indoor games), most extreme first
+    week_info: dict  # {week: {league: {"label", "first", "last"}}}
+    hidden: dict  # {week: outdoor games left out because there is no forecast for them}
+    hidden_soon: dict  # the part of `hidden` that should have had one (kicks off within FORECAST_SAFE_DAYS)
+
+
+def build_report(leagues: list[str], weeks: tuple[str, ...] = ("this", "next")) -> Report:
+    """Rows for the requested weeks, plus week labels and counts of games left out."""
     tagged: list[tuple[str, games_mod.Game]] = []
     seen: set[str] = set()  # an FBS-vs-FCS game is listed by both leagues; keep the first
     week_info: dict[str, dict] = {w: {} for w in weeks}
@@ -61,6 +66,8 @@ def build_report(leagues: list[str], weeks: tuple[str, ...] = ("this", "next")):
 
     rows = []
     hidden = {w: 0 for w in weeks}
+    hidden_soon = {w: 0 for w in weeks}
+    soon = datetime.now(timezone.utc) + timedelta(days=FORECAST_SAFE_DAYS)
     for key, g in tagged:
         row = {
             "id": f"{g.league}:{g.espn_id}",
@@ -91,6 +98,8 @@ def build_report(leagues: list[str], weeks: tuple[str, ...] = ("this", "next")):
             w = wx.summarize_window(fc, g.kickoff) if fc else None
             if w is None:
                 hidden[key] += 1  # no forecast: leave the game out
+                if g.kickoff <= soon:
+                    hidden_soon[key] += 1
                 continue
             s_ = score(w)
             row.update(score=s_.total, factors=s_.parts, tags=s_.tags, venue_tz=fc.get("timezone"))
@@ -110,7 +119,7 @@ def build_report(leagues: list[str], weeks: tuple[str, ...] = ("this", "next")):
         rows.append(row)
 
     rows.sort(key=lambda r: (-(r["score"] or 0), r["kickoff_utc"]))
-    return rows, week_info, hidden
+    return Report(rows, week_info, hidden, hidden_soon)
 
 
 def _fmt_kickoff(iso: str, tz: ZoneInfo, tba: bool) -> str:
@@ -154,8 +163,10 @@ def print_table(rows: list[dict], tz: ZoneInfo, week_info: dict, hidden: int = 0
             f"{_fmt_kickoff(r['kickoff_utc'], tz, r['time_tba']):<16}  {wx_cols}  {venue}"
         )
     print("\nTemp = at kickoff; Feel = coldest feels-like during the game; Wind = max sustained g gust (mph).")
-    labels = " · ".join(f"{LEAGUE_NAMES.get(lg, lg)} {info['label']}" for lg, info in week_info.items())
-    print(f"Showing: {labels}")
+    labels = " · ".join(
+        f"{LEAGUE_NAMES.get(lg, lg)} {info['label']}" for lg, info in week_info.items() if info["first"]
+    )
+    print(f"Showing: {labels or 'no games scheduled'}")
     if hidden:
         print(f"{hidden} game{'s' if hidden != 1 else ''} not shown: no forecast yet (US National Weather Service looks about 7 days ahead).")
     else:
@@ -183,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
     leagues = ["nfl", "cfb", "fcs"] if args.league == "all" else [args.league]
     weeks = ("this", "next") if args.site_data else (args.week,)
     try:
-        rows, week_info, hidden = build_report(leagues, weeks)
+        rows, week_info, hidden, hidden_soon = build_report(leagues, weeks)
     except NetworkError as err:
         print(f"error: {err}", file=sys.stderr)
         print(
@@ -195,7 +206,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.site_data:
         try:
-            payload = build_payload(rows, week_info, hidden, previous=load_previous(args.previous))
+            payload = build_payload(
+                rows, week_info, hidden, previous=load_previous(args.previous), hidden_soon=hidden_soon
+            )
         except UnhealthyData as err:
             print(f"error: not writing {args.site_data}: {err}", file=sys.stderr)
             return 1
