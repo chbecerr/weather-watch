@@ -10,6 +10,8 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 
+from .scoring import SCORE_VERSION
+
 RETENTION = timedelta(days=8)  # forecasts reach ~7 days ahead, plus a day of slack
 MIN_SPACING = timedelta(hours=2)  # a re-run within this of the last sample replaces it
 TREND_MIN_AGE = timedelta(hours=5)  # need a baseline at least this old to call it a trend...
@@ -19,13 +21,18 @@ TREND_MAX_AGE = timedelta(hours=26)  # ...and we compare to roughly a day ago, n
 def load_previous(path: str | os.PathLike | None) -> dict[str, list[list]]:
     """{game id: [[iso time, score], ...]} from a previously published data.json.
 
-    A missing or unreadable file just means "no history yet".
+    A missing or unreadable file just means "no history yet". So does a file written
+    under a different scoring formula: its scores aren't comparable with today's, and
+    carrying them over would show every game as having jumped.
     """
     if not path:
         return {}
     try:
         with open(path, encoding="utf-8") as fh:
-            games = json.load(fh).get("games", [])
+            data = json.load(fh)
+        if data.get("score_version", 1) != SCORE_VERSION:
+            return {}
+        games = data.get("games", [])
     except (OSError, ValueError, AttributeError):
         return {}
     out: dict[str, list[list]] = {}

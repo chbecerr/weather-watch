@@ -10,7 +10,7 @@ from weather_watch.site import UnhealthyData, build_payload
 from weather_watch import weather as weather_mod
 from weather_watch import nws as nws_mod
 from weather_watch.nws import grid_to_hourly, parse_valid_time
-from weather_watch.scoring import score
+from weather_watch.scoring import SCORE_VERSION, score
 from weather_watch.weather import GameWeather, summarize_window
 
 
@@ -24,22 +24,70 @@ def wx(**kw):
 
 
 class ScoringTests(unittest.TestCase):
+    # Reference conditions per severity tier. wind cases set gusts to 0 so only sustained wind is scored.
+    TIERS = {
+        15: {"cold": dict(feels_min_f=20), "heat": dict(feels_max_f=95), "wind": dict(wind_mph=20, gust_mph=0),
+             "rain": dict(rain_in=0.3), "snow": dict(snow_in=1)},
+        40: {"cold": dict(feels_min_f=5), "heat": dict(feels_max_f=105), "wind": dict(wind_mph=30, gust_mph=0),
+             "rain": dict(rain_in=0.8), "snow": dict(snow_in=3)},
+        80: {"cold": dict(feels_min_f=-15), "heat": dict(feels_max_f=112), "wind": dict(wind_mph=40, gust_mph=0),
+             "rain": dict(rain_in=1.5), "snow": dict(snow_in=6)},
+    }
+
     def test_mild_day_scores_zero(self):
         self.assertEqual(score(wx()).total, 0)
 
-    def test_each_factor_contributes(self):
-        self.assertEqual(score(wx(feels_min_f=10)).parts["cold"], 30)
-        self.assertEqual(score(wx(feels_max_f=100)).parts["heat"], 22.5)
-        self.assertEqual(score(wx(wind_mph=25, gust_mph=20)).parts["wind"], 30)
-        self.assertEqual(score(wx(rain_in=0.5)).parts["rain"], 20)
-        self.assertEqual(score(wx(snow_in=2)).parts["snow"], 30)
-        self.assertEqual(score(wx(weather_code=95)).parts["storm"], 20)
+    def test_nothing_scores_at_or_below_its_comfort_level(self):
+        calm = score(wx(feels_min_f=40, feels_max_f=85, wind_mph=10, gust_mph=20, rain_in=0, snow_in=0))
+        self.assertEqual(calm.total, 0)
+
+    def test_the_same_severity_scores_the_same_for_every_factor(self):
+        for points, cases in self.TIERS.items():
+            for factor, kwargs in cases.items():
+                with self.subTest(points=points, factor=factor):
+                    self.assertAlmostEqual(score(wx(**kwargs)).parts[factor], points, places=1)
+
+    def test_gust_reference_points(self):
+        for gust, points in ((35, 10), (46, 40), (58, 80)):
+            with self.subTest(gust=gust):
+                self.assertAlmostEqual(score(wx(wind_mph=0, gust_mph=gust)).parts["wind"], points, places=1)
+
+    def test_gusts_add_only_a_quarter_of_the_smaller_wind_component(self):
+        w = score(wx(wind_mph=20, gust_mph=35)).parts["wind"]  # sustained 15 pts, gust 10 pts
+        self.assertAlmostEqual(w, 15 + 0.25 * 10, places=1)
+        self.assertAlmostEqual(score(wx(wind_mph=0, gust_mph=46)).parts["wind"], 40, places=1)  # gusts alone still count in full
+
+    def test_storm_is_a_flat_bonus_for_thunderstorm_codes(self):
+        for code, expected in ((3, 0), (80, 0), (95, 20), (96, 20), (99, 20)):
+            self.assertEqual(score(wx(weather_code=code)).parts["storm"], expected, code)
+
+    def test_every_factor_keeps_rising_with_conditions_even_past_its_last_reference_point(self):
+        series = {
+            "cold": [dict(feels_min_f=f) for f in (35, 20, 5, -15, -30, -48)],
+            "heat": [dict(feels_max_f=f) for f in (86, 95, 105, 112, 118, 125)],
+            "wind": [dict(wind_mph=m, gust_mph=0) for m in (11, 20, 30, 40, 50, 60)],
+            "rain": [dict(rain_in=r) for r in (0.02, 0.1, 0.3, 0.8, 1.5, 3.0)],
+            "snow": [dict(snow_in=s) for s in (0.1, 1, 3, 6, 10, 20)],
+        }
+        for factor, steps in series.items():
+            pts = [score(wx(**kw)).parts[factor] for kw in steps]
+            with self.subTest(factor=factor):
+                self.assertEqual(pts, sorted(set(pts)), pts)  # strictly increasing
+        self.assertGreater(score(wx(feels_min_f=-48)).parts["cold"], 80)  # -48 is worse than -15, not capped at it
+
+    def test_compound_conditions_outrank_any_single_severe_one(self):
+        blizzard = score(wx(feels_min_f=5, wind_mph=25, gust_mph=40, snow_in=3, weather_code=75))
+        singles = [score(wx(**kw)).total for kw in (dict(feels_min_f=5), dict(snow_in=3), dict(wind_mph=30, gust_mph=0), dict(rain_in=0.8))]
+        self.assertGreater(blizzard.total, max(singles))
+        self.assertEqual(set(blizzard.tags), {"COLD", "WIND", "SNOW"})
 
     def test_blizzard_beats_drizzle(self):
-        blizzard = score(wx(feels_min_f=5, wind_mph=25, gust_mph=40, snow_in=3, weather_code=75))
-        drizzle = score(wx(rain_in=0.05, weather_code=51))
-        self.assertGreater(blizzard.total, drizzle.total)
-        self.assertEqual(set(blizzard.tags), {"COLD", "WIND", "SNOW"})
+        self.assertGreater(score(wx(feels_min_f=5, wind_mph=25, gust_mph=40, snow_in=3)).total,
+                           score(wx(rain_in=0.05, weather_code=51)).total)
+
+    def test_a_tag_appears_from_5_points(self):
+        self.assertEqual(score(wx(feels_min_f=32)).tags, ["COLD"])   # 8 degrees below 40 -> 6 pts
+        self.assertEqual(score(wx(feels_min_f=36)).tags, [])         # 4 degrees below 40 -> 3 pts
 
 
 class WindowTests(unittest.TestCase):
@@ -413,7 +461,8 @@ class HistoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             good = os.path.join(d, "data.json")
             with open(good, "w") as fh:
-                json.dump({"games": [{"id": "NFL:1", "history": [[iso(3), 4.0]]}, {"id": "NFL:2"}]}, fh)
+                json.dump({"score_version": SCORE_VERSION,
+                           "games": [{"id": "NFL:1", "history": [[iso(3), 4.0]]}, {"id": "NFL:2"}]}, fh)
             self.assertEqual(history.load_previous(good), {"NFL:1": [[iso(3), 4.0]]})
             bad = os.path.join(d, "bad.json")
             with open(bad, "w") as fh:
@@ -437,6 +486,26 @@ class HistoryTests(unittest.TestCase):
         self.assertNotIn("history", out["games"][0])
         out = build_payload([dict(row)], {}, {"this": 0}, now=T0, previous={})
         self.assertEqual(len(out["games"][0]["history"]), 1)
+
+
+class ScoreVersionTests(unittest.TestCase):
+    def test_payload_records_the_scoring_version(self):
+        self.assertEqual(build_payload([], {}, {"this": 0})["score_version"], SCORE_VERSION)
+
+    def test_history_from_another_scoring_formula_is_discarded(self):
+        import json, os, tempfile
+        game = {"id": "NFL:1", "history": [[iso(3), 4.0]]}
+        with tempfile.TemporaryDirectory() as d:
+            for name, version, expect_kept in (("current.json", SCORE_VERSION, True),
+                                               ("older.json", SCORE_VERSION - 1, False),
+                                               ("unversioned.json", None, False)):  # files from before versioning are version 1
+                path = os.path.join(d, name)
+                payload = {"games": [game]}
+                if version is not None:
+                    payload["score_version"] = version
+                with open(path, "w") as fh:
+                    json.dump(payload, fh)
+                self.assertEqual(bool(history.load_previous(path)), expect_kept, name)
 
 
 class SiteDataTests(unittest.TestCase):

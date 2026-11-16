@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import history
+from .scoring import SCORE_VERSION
 
 
 SOON_DAYS = 5  # the Weather Service looks ~7 days ahead; inside this, a missing forecast is a problem
@@ -54,6 +55,7 @@ def build_payload(
     return {
         "generated_at": now.astimezone(timezone.utc).isoformat(timespec="seconds"),
         "source": "US National Weather Service",
+        "score_version": SCORE_VERSION,
         "weeks": week_info,
         "hidden": hidden,
         "games": rows,

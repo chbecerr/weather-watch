@@ -83,20 +83,34 @@ python3 -m http.server -d docs 8000   # open http://localhost:8000
 
 ## Score
 
-Each factor adds points only past a comfort threshold, so a calm, dry, mild
-game scores 0. Higher is more extreme.
+Higher is more extreme, and a calm, dry, mild game scores 0. Each factor is a ramp
+through reference points that mean the same thing for every factor, so 20 points of
+cold is as extreme as 20 points of wind:
 
-| Factor | Points |
-|---|---|
-| Cold | 1 per °F the coldest feels-like temperature is below 40°F |
-| Heat | 1.5 per °F the hottest feels-like temperature is above 85°F |
-| Wind | 2 per mph of sustained wind over 10, plus 0.75 per mph of gusts over 20 |
-| Rain | 40 per inch during the game |
-| Snow | 15 per inch during the game |
-| Thunderstorm | +20 (lightning delays) |
+| Points | Meaning | Cold (feels-like) | Heat (feels-like) | Wind (sustained) | Gusts | Rain | Snow |
+|---|---|---|---|---|---|---|---|
+| 15 | noticeable: affects the game or crowd | 20°F | 95°F | 20 mph | ~37 mph | 0.3″ | 1″ |
+| 40 | severe: about NWS advisory level | 5°F | 105°F | 30 mph | 46 mph | 0.8″ | 3″ |
+| 80 | extreme: about warning level | −15°F | 112°F | 40 mph | 58 mph | 1.5″ | 6″ |
 
-A tag (COLD, WIND, …) appears when a factor contributes 5 or more points.
-The weights are in `weather_watch/scoring.py`.
+Plus a flat 20 for thunderstorms (lightning delays). Nothing scores below its comfort
+level (feels-like between 40°F and 85°F, wind under 10 mph, gusts under 20 mph,
+no precipitation). Between reference points the ramp is a straight line, and past the
+last one it keeps climbing, so −48°F scores higher than −15°F. Sustained wind and
+gusts are combined as the larger plus a quarter of the smaller, because gusts track
+sustained wind and shouldn't be counted twice. Rain and snow are totals during the
+game, not rates. A tag (COLD, WIND, …) appears when a factor contributes 5 or more points.
+
+These reference points are judgment calls, loosely anchored on typical National Weather
+Service criteria (which vary by region), not measurements: there is no ground truth for
+"how extreme is a game's weather". They are in `weather_watch/scoring.py`, in one place,
+and the tests pin them down. Cold is scored on the feels-like temperature, which already
+includes wind chill, and wind is scored too, so wind in the cold counts twice on purpose:
+it hurts the crowd and the passing game in different ways.
+
+The site keeps each game's score history, so changing the formula means bumping
+`SCORE_VERSION`: the history from the old formula is then discarded instead of showing
+every game as having jumped.
 
 ## Caveats
 
