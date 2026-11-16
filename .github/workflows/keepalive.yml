@@ -1,0 +1,37 @@
+name: Keep scheduled runs alive
+
+# GitHub switches off scheduled workflows in a public repository after 60 days with no
+# repository activity, and a switched-off schedule can't restart itself. This job runs weekly
+# and, only if the newest commit is more than 45 days old, makes one tiny commit, which counts
+# as activity. (If it ever does get switched off, re-enable it from the Actions tab.)
+
+on:
+  schedule:
+    - cron: "41 5 * * 1" # Mondays
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Commit if the repository has been quiet
+        run: |
+          last=$(git log -1 --format=%ct)
+          age_days=$(( ( $(date +%s) - last ) / 86400 ))
+          echo "The newest commit is ${age_days} days old."
+          if [ "$age_days" -lt 45 ]; then
+            echo "Recently active; nothing to do."
+            exit 0
+          fi
+          date -u +"Last keepalive: %Y-%m-%d" > .github/keepalive.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/keepalive.txt
+          git commit -m "Keep scheduled workflows alive (no commits for ${age_days} days)"
+          git push
