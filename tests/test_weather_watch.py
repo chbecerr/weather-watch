@@ -96,7 +96,7 @@ class NwsTests(unittest.TestCase):
         self.assertEqual(hours, 30)
         self.assertEqual(parse_valid_time("2026-11-15T18:00:00+00:00/PT2H")[1], 2)
 
-    def test_grid_converted_to_open_meteo_shape(self):
+    def test_grid_converted_to_hourly_table(self):
         grid = {
             "temperature": {"uom": "wmoUnit:degC", "values": [
                 {"validTime": "2026-11-22T18:00:00+00:00/PT2H", "value": 0}]},

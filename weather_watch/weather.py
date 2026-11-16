@@ -1,4 +1,4 @@
-"""Geocode stadium cities and pull hourly forecasts from Open-Meteo (no API key)."""
+"""Geocode stadium cities and summarize a game-window forecast."""
 
 from __future__ import annotations
 
@@ -12,18 +12,6 @@ from datetime import datetime, timedelta, timezone
 from .http import get_json
 
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
-FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
-
-HOURLY_VARS = [
-    "temperature_2m",
-    "apparent_temperature",
-    "rain",
-    "showers",
-    "snowfall",
-    "wind_speed_10m",
-    "wind_gusts_10m",
-    "weather_code",
-]
 
 GAME_HOURS = 4  # kickoff hour + 3 more ~= a football game
 
@@ -42,7 +30,7 @@ US_STATES = {
     "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming", "PR": "Puerto Rico",
 }
 
-# WMO weather codes -> short description (subset Open-Meteo returns).
+# WMO weather codes -> short description (nws.py maps NWS conditions onto these).
 WMO = {
     0: "Clear", 1: "Mostly clear", 2: "Partly cloudy", 3: "Overcast",
     45: "Fog", 48: "Freezing fog",
@@ -148,35 +136,8 @@ def _safe_geocode(city, state, country):
         return None
 
 
-def fetch_forecasts(
-    coords: list[tuple[float, float]], chunk: int = 50, retries: int = 3, timeout: float = 20.0
-) -> list[dict]:
-    """Hourly forecasts (UTC) for many points; Open-Meteo accepts comma-separated lists."""
-    out: list[dict] = []
-    for i in range(0, len(coords), chunk):
-        part = coords[i : i + chunk]
-        data = get_json(
-            FORECAST_URL,
-            {
-                "latitude": ",".join(f"{lat:.4f}" for lat, _ in part),
-                "longitude": ",".join(f"{lon:.4f}" for _, lon in part),
-                "hourly": ",".join(HOURLY_VARS),
-                "temperature_unit": "fahrenheit",
-                "wind_speed_unit": "mph",
-                "precipitation_unit": "inch",
-                "timezone": "GMT",
-                "past_days": 1,
-                "forecast_days": 16,
-            },
-            retries=retries,
-            timeout=timeout,
-        )
-        out.extend(data if isinstance(data, list) else [data])
-    return out
-
-
 def summarize_window(forecast: dict, kickoff: datetime, hours: int = GAME_HOURS) -> GameWeather | None:
-    """Collapse the hourly forecast covering the game into one summary."""
+    """Collapse the hourly forecast (see nws.grid_to_hourly) covering the game into one summary."""
     h = forecast.get("hourly") or {}
     times = h.get("time") or []
     start = kickoff.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)

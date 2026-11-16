@@ -1,9 +1,8 @@
-"""Fallback forecasts from the US National Weather Service (api.weather.gov).
+"""Hourly forecasts from the US National Weather Service (api.weather.gov).
 
-Used when Open-Meteo can't be reached. US locations only, ~7 days ahead.
-The NWS grid data is converted into the same shape as an Open-Meteo hourly
-response (°F, mph, inches, WMO weather codes) so the rest of the tool doesn't
-care which source it came from.
+US locations only, about 7 days ahead. The NWS gridpoint data is converted into
+a simple hourly table (°F, mph, inches, WMO-style weather codes) that the
+scoring code reads.
 """
 
 from __future__ import annotations
@@ -85,7 +84,7 @@ _WX_CODES = {
 
 
 # Low-confidence coverages ("slight chance of thunderstorms") don't count as the
-# hour's weather; Open-Meteo's codes describe the expected weather, not a maybe.
+# hour's weather: a mention of "slight chance of thunderstorms" isn't a storm.
 _UNLIKELY = {"slight_chance", "chance", "isolated", "few", "patchy"}
 
 
@@ -110,7 +109,7 @@ def _weather_codes(grid: dict) -> dict[str, int]:
 
 
 def grid_to_hourly(grid: dict) -> dict:
-    """Convert NWS gridpoint properties into an Open-Meteo-style forecast dict."""
+    """Convert NWS gridpoint properties into a dict of hourly lists."""
     temp = _hourly(grid.get("temperature"))
     feels = _hourly(grid.get("apparentTemperature"))
     wind = _hourly(grid.get("windSpeed"))
@@ -136,7 +135,7 @@ def grid_to_hourly(grid: dict) -> dict:
         hourly["wind_speed_10m"].append(wind.get(t, 0.0))
         hourly["wind_gusts_10m"].append(gust.get(t, wind.get(t, 0.0)))
         hourly["weather_code"].append(codes.get(t, 0))
-    return {"hourly": hourly, "source": "nws"}
+    return {"hourly": hourly}
 
 
 def _grid_url(lat: float, lon: float, cache: dict) -> str | None:
