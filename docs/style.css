@@ -78,7 +78,9 @@ h1 { margin: 0; font-size: 1.6rem; letter-spacing: -0.01em; }
 .updated { margin: 10px 0 0; font-size: 0.875rem; color: var(--muted); }
 
 /* Controls */
-.controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 18px 0 12px; }
+.weekbar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin: 18px 0 0; }
+.weeklabel { margin: 0; font-size: 0.9rem; color: var(--muted); }
+.controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 12px 0 12px; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--surface); }
 .seg button {
   font: inherit; padding: 8px 14px; border: 0; background: transparent; color: var(--text); cursor: pointer;

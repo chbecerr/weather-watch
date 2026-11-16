@@ -1,6 +1,8 @@
 import unittest
 from datetime import datetime, timezone
+from unittest import mock
 
+from weather_watch import games as games_mod
 from weather_watch.games import parse_events
 from weather_watch.site import UnhealthyData, build_payload
 from weather_watch.nws import grid_to_hourly, parse_valid_time
@@ -122,25 +124,85 @@ class NwsTests(unittest.TestCase):
 
 
 class SiteDataTests(unittest.TestCase):
-    def row(self, indoor=False, weather=True):
-        return {"indoor": indoor, "weather": {"temp_f": 50} if weather else None}
+    def row(self, week="this", indoor=False):
+        return {"week": week, "indoor": indoor, "weather": None if indoor else {"temp_f": 50}}
 
     def test_payload_wraps_rows_with_timestamp(self):
         now = datetime(2026, 11, 20, 12, 0, tzinfo=timezone.utc)
-        out = build_payload([self.row()], 7, now=now)
+        out = build_payload([self.row()], {"this": {"NFL": {"label": "Week 11"}}}, {"this": 0}, now=now)
         self.assertEqual(out["generated_at"], "2026-11-20T12:00:00+00:00")
+        self.assertEqual(out["weeks"]["this"]["NFL"]["label"], "Week 11")
         self.assertEqual(len(out["games"]), 1)
 
-    def test_refuses_when_no_outdoor_game_has_a_forecast(self):
+    def test_refuses_when_this_weeks_outdoor_games_all_lack_forecasts(self):
         with self.assertRaises(UnhealthyData):
-            build_payload([self.row(weather=False), self.row(indoor=True, weather=False)], 7)
+            build_payload([self.row(indoor=True)], {}, {"this": 3})
 
-    def test_allows_a_week_with_only_indoor_games_or_none(self):
-        build_payload([self.row(indoor=True, weather=False)], 7)
-        build_payload([], 7)
+    def test_allows_missing_forecasts_for_next_week_only(self):
+        build_payload([self.row()], {}, {"this": 0, "next": 5})
 
-    def test_allows_partial_forecast_coverage(self):
-        build_payload([self.row(), self.row(weather=False)], 7)
+    def test_allows_partial_coverage_and_empty_weeks(self):
+        build_payload([self.row()], {}, {"this": 2})
+        build_payload([], {}, {"this": 0})
+
+
+def ev(game_id, state, when="2026-11-22T18:00Z"):
+    return {
+        "id": game_id, "name": game_id, "shortName": game_id, "date": when,
+        "competitions": [{
+            "venue": {"fullName": "V", "address": {"city": "C", "state": "S"}},
+            "status": {"type": {"state": state}},
+        }],
+    }
+
+
+def fake_espn(current, weeks):
+    """Stand-in for games._fetch: no params = current scoreboard, else look up the week."""
+    def fetch(league, params=None):
+        if not params:
+            return current
+        return {"events": weeks.get((params["seasontype"], params["week"]), [])}
+    return fetch
+
+
+def ids(week_games):
+    return [g.espn_id for g in week_games.games]
+
+
+class WeekTests(unittest.TestCase):
+    def test_monday_keeps_current_week_with_only_the_unplayed_game(self):
+        current = {"week": {"number": 10}, "season": {"type": 2},
+                   "events": [ev("a", "post", "2026-11-13T01:15Z"), ev("mnf", "pre", "2026-11-17T01:15Z")]}
+        weeks = {(2, 11): [ev("c", "pre"), ev("d", "pre")]}
+        with mock.patch.object(games_mod, "_fetch", fake_espn(current, weeks)):
+            lw = games_mod.fetch_weeks("nfl")
+        self.assertEqual((lw.this.label, ids(lw.this)), ("Week 10", ["mnf"]))
+        self.assertEqual((lw.next.label, ids(lw.next)), ("Week 11", ["c", "d"]))
+        self.assertEqual(lw.this.first, datetime(2026, 11, 13, 1, 15, tzinfo=timezone.utc))  # finished games still set the range
+        self.assertEqual(lw.this.last, datetime(2026, 11, 17, 1, 15, tzinfo=timezone.utc))
+
+    def test_finished_week_rolls_forward(self):
+        current = {"week": {"number": 10}, "season": {"type": 2}, "events": [ev("a", "post"), ev("b", "post")]}
+        weeks = {(2, 11): [ev("c", "pre")], (2, 12): [ev("e", "pre")]}
+        with mock.patch.object(games_mod, "_fetch", fake_espn(current, weeks)):
+            lw = games_mod.fetch_weeks("nfl")
+        self.assertEqual((lw.this.label, ids(lw.this)), ("Week 11", ["c"]))
+        self.assertEqual((lw.next.label, ids(lw.next)), ("Week 12", ["e"]))
+
+    def test_end_of_regular_season_moves_into_postseason(self):
+        current = {"week": {"number": 18}, "season": {"type": 2}, "events": [ev("a", "post")]}
+        weeks = {(3, 1): [ev("wc", "pre")], (3, 2): [ev("div", "pre")]}
+        with mock.patch.object(games_mod, "_fetch", fake_espn(current, weeks)):
+            lw = games_mod.fetch_weeks("nfl")
+        self.assertEqual((lw.this.label, ids(lw.this)), ("Postseason", ["wc"]))
+        self.assertEqual((lw.next.label, ids(lw.next)), ("Postseason", ["div"]))
+
+    def test_unpublished_next_week_is_empty_not_an_error(self):
+        current = {"week": {"number": 10}, "season": {"type": 2}, "events": [ev("a", "pre")]}
+        with mock.patch.object(games_mod, "_fetch", fake_espn(current, {})):
+            lw = games_mod.fetch_weeks("cfb")
+        self.assertEqual(ids(lw.this), ["a"])
+        self.assertEqual((lw.next.games, lw.next.first), ([], None))
 
 
 if __name__ == "__main__":

@@ -12,23 +12,27 @@ class UnhealthyData(Exception):
     """The report looks broken; don't publish it over a good earlier one."""
 
 
-def build_payload(rows: list[dict], days: int, now: datetime | None = None) -> dict:
+def build_payload(
+    rows: list[dict], week_info: dict, hidden: dict, now: datetime | None = None
+) -> dict:
     """Wrap report rows for the website, refusing obviously broken reports.
 
-    A report where games exist but none of the outdoor ones got a forecast
-    means the weather service failed; publishing it would blank the site.
+    If this week has outdoor games but none of them got a forecast, the weather
+    service failed; publishing that would blank the site.
     """
-    outdoor = [r for r in rows if not r["indoor"]]
-    if outdoor and not any(r["weather"] for r in outdoor):
+    shown = sum(1 for r in rows if r["week"] == "this" and not r["indoor"])
+    left_out = hidden.get("this", 0)
+    if left_out and not shown:
         raise UnhealthyData(
-            f"none of the {len(outdoor)} outdoor games got a forecast "
+            f"none of this week's {left_out} outdoor games got a forecast "
             "(is api.weather.gov or the city lookup down?)"
         )
     now = now or datetime.now(timezone.utc)
     return {
         "generated_at": now.astimezone(timezone.utc).isoformat(timespec="seconds"),
-        "days": days,
         "source": "US National Weather Service",
+        "weeks": week_info,
+        "hidden": hidden,
         "games": rows,
     }
 

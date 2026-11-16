@@ -4,7 +4,11 @@ const STALE_HOURS = 12;
 const FACTOR_LABELS = { wind: "Wind", cold: "Cold", heat: "Heat", rain: "Rain", snow: "Snow", storm: "Storm" };
 const $ = (id) => document.getElementById(id);
 
-const state = { games: [], league: "all", day: "all", q: "", showAll: false, sort: "score", dir: "desc" };
+const LEAGUE_NAMES = { NFL: "NFL", CFB: "College" };
+const state = {
+  games: [], info: {}, hidden: {}, week: "this", autoNext: false,
+  league: "all", day: "all", q: "", showAll: false, sort: "score", dir: "desc",
+};
 
 // ---- tiny helpers -------------------------------------------------------
 
@@ -61,6 +65,7 @@ function prepare(g) {
 function visible() {
   const q = state.q.trim().toLowerCase();
   return state.games.filter((g) => {
+    if (g.week !== state.week) return false;
     if (!state.showAll && !g.hasScore) return false;
     if (state.league !== "all" && g.league !== state.league) return false;
     if (state.day !== "all" && g.day !== state.day) return false;
@@ -181,8 +186,16 @@ function render() {
   const maxScore = Math.max(60, ...rows.map((g) => (g.hasScore ? g.score : 0)));
   rows.forEach((g) => list.append(renderGame(g, maxScore)));
 
-  $("empty").hidden = rows.length > 0 || !state.games.length;
-  $("count").textContent = rows.length ? `${rows.length} game${rows.length === 1 ? "" : "s"}` : "";
+  const inWeek = state.games.filter((g) => g.week === state.week && (state.showAll || g.hasScore)).length;
+  const left = state.hidden[state.week] || 0;
+  $("empty").hidden = rows.length > 0;
+  $("empty").textContent = inWeek === 0
+    ? "No games with a forecast yet for this week. Forecasts reach about 7 days ahead, so check back later."
+    : "No games match those filters.";
+  $("count").textContent = [
+    rows.length ? `${rows.length} game${rows.length === 1 ? "" : "s"}` : "",
+    left ? `${left} not shown (no forecast yet)` : "",
+  ].filter(Boolean).join(" · ");
   for (const b of document.querySelectorAll("#head button")) {
     const on = b.dataset.sort === state.sort;
     b.setAttribute("aria-pressed", String(on));
@@ -194,13 +207,27 @@ function render() {
 
 function populateDays() {
   const sel = $("day");
+  sel.replaceChildren(el("option", { value: "all", text: "All days" }));
   const seen = new Map();
-  for (const g of state.games.slice().sort((a, b) => a.kickoff - b.kickoff)) {
-    if (g.hasScore && !seen.has(g.day)) seen.set(g.day, dayFmt.format(g.kickoff));
+  const inWeek = state.games.filter((g) => g.week === state.week && (state.showAll || g.hasScore));
+  for (const g of inWeek.sort((a, b) => a.kickoff - b.kickoff)) {
+    if (!seen.has(g.day)) seen.set(g.day, dayFmt.format(g.kickoff));
   }
   for (const [k, label] of seen) sel.append(el("option", { value: k, text: label }));
   if (!seen.has(state.day)) state.day = "all";
   sel.value = state.day;
+}
+
+function dateRange(first, last) {
+  const a = dayFmt.format(new Date(first)), b = dayFmt.format(new Date(last));
+  return a === b ? a : `${a} – ${b}`;
+}
+
+function renderWeekLabel() {
+  const info = state.info[state.week] || {};
+  const parts = Object.entries(info).map(([lg, w]) =>
+    `${LEAGUE_NAMES[lg] || lg} ${w.label}${w.first ? ` (${dateRange(w.first, w.last)})` : ""}`);
+  $("weeklabel").textContent = parts.join(" · ") + (state.autoNext ? ". Nothing left this week, so this is next week." : "");
 }
 
 function setupControls() {
@@ -213,10 +240,20 @@ function setupControls() {
   });
   syncLeague();
 
+  const weekSeg = $("week");
+  const syncWeek = () => weekSeg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === state.week)));
+  weekSeg.addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    state.week = b.dataset.v; state.autoNext = false; state.day = "all";
+    syncWeek(); populateDays(); renderWeekLabel(); render();
+  });
+  syncWeek();
+
   $("day").addEventListener("change", (e) => { state.day = e.target.value; render(); });
   $("q").addEventListener("input", (e) => { state.q = e.target.value; render(); });
   $("showAll").checked = state.showAll;
-  $("showAll").addEventListener("change", (e) => { state.showAll = e.target.checked; store("showAll", state.showAll); render(); });
+  $("showAll").addEventListener("change", (e) => { state.showAll = e.target.checked; store("showAll", state.showAll); populateDays(); render(); });
 
   $("head").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-sort]");
@@ -247,6 +284,8 @@ async function main() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     state.games = data.games.map(prepare);
+    state.info = data.weeks || {};
+    state.hidden = data.hidden || {};
     showUpdated(data.generated_at);
   } catch (err) {
     $("updated").textContent = "";
@@ -256,8 +295,11 @@ async function main() {
     console.error(err);
     return;
   }
+  const count = (w) => state.games.filter((g) => g.week === w && g.hasScore).length;
+  if (count("this") === 0 && count("next") > 0) { state.week = "next"; state.autoNext = true; }
   populateDays();
   setupControls();
+  renderWeekLabel();
   render();
 }
 

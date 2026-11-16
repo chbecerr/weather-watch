@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from .http import get_json
 
@@ -83,38 +83,91 @@ def _fetch(league: str, params: dict | None = None) -> dict:
     return get_json(f"{BASE}/{path}/scoreboard", {**extra, **(params or {})})
 
 
-def fetch_games(league: str, days: int = 7, now: datetime | None = None) -> list[Game]:
-    """Games kicking off within the next `days` days (plus any still in progress).
+@dataclass
+class WeekGames:
+    """One league's games for one football week, using ESPN's own week numbering."""
 
-    ESPN's scoreboard doesn't accept date ranges for football, so we take the
-    current week and the following one and filter by kickoff time.
+    label: str  # "Week 11", "Postseason", ...
+    games: list[Game]  # games not yet finished
+    first: datetime | None  # kickoff range of every game ESPN lists for the week
+    last: datetime | None
+
+
+@dataclass
+class LeagueWeeks:
+    this: WeekGames
+    next: WeekGames
+
+
+_SEASON_LABELS = {1: "Preseason Week", 2: "Week"}
+
+
+def _label(season_type: int, week: int) -> str:
+    if season_type == 3:
+        return "Postseason"
+    return f"{_SEASON_LABELS.get(season_type, 'Week')} {week}"
+
+
+def _load(league: str, season_type: int, week: int) -> list[Game]:
+    return parse_events(league, _fetch(league, {"seasontype": season_type, "week": week}))
+
+
+def _candidates(season_type: int, week: int) -> list[tuple[int, int]]:
+    """Weeks that could follow (season_type, week), crossing into the next phase."""
+    if season_type == 2:
+        return [(2, week + 1), (3, 1)]
+    if season_type == 3:
+        return [(3, week + 1), (3, week + 2)]
+    return [(season_type, week + 1), (2, 1)]
+
+
+def _following(league: str, season_type: int, week: int) -> tuple[tuple[int, int], list[Game]]:
+    """The next week ESPN has games for, or an empty week if it has none yet."""
+    for st, wk in _candidates(season_type, week):
+        try:
+            found = _load(league, st, wk)
+        except Exception:
+            continue  # that week isn't published yet
+        if found:
+            return (st, wk), found
+    st, wk = _candidates(season_type, week)[0]
+    return (st, wk), []
+
+
+def _week(season_type: int | None, week: int | None, all_games: list[Game], label: str | None = None) -> WeekGames:
+    times = [g.kickoff for g in all_games]
+    return WeekGames(
+        label=label or _label(season_type, week),
+        games=[g for g in all_games if g.status != "post"],
+        first=min(times) if times else None,
+        last=max(times) if times else None,
+    )
+
+
+def fetch_weeks(league: str) -> LeagueWeeks:
+    """This week's and next week's games, following ESPN's definition of a week.
+
+    "This week" is ESPN's current week. Once every game in it has been played
+    (e.g. NFL on Tuesday), it moves on to the following week so you're never
+    looking at an empty list. Finished games are dropped.
     """
-    now = now or datetime.now(timezone.utc)
-    window_start = now - timedelta(hours=4)  # include games in progress
-    window_end = now + timedelta(days=days)
-
     current = _fetch(league)
     week = (current.get("week") or {}).get("number")
     season_type = (current.get("season") or {}).get("type")
+    current_games = parse_events(league, current)
 
-    payloads = [current]
-    if week is not None and season_type is not None:
-        try:
-            nxt = _fetch(league, {"seasontype": season_type, "week": week + 1})
-            if not nxt.get("events") and season_type == 2:
-                # Regular season over: try the first postseason week.
-                nxt = _fetch(league, {"seasontype": 3, "week": 1})
-            payloads.append(nxt)
-        except Exception:
-            pass  # Next week not published yet; current week is still useful.
+    if week is None or season_type is None:  # unexpected payload: show what's unfinished
+        return LeagueWeeks(
+            this=_week(None, None, current_games, label="This week"),
+            next=_week(None, None, [], label="Next week"),
+        )
 
-    seen: set[str] = set()
-    games: list[Game] = []
-    for p in payloads:
-        for g in parse_events(league, p):
-            if g.espn_id in seen or g.status == "post":
-                continue
-            if window_start <= g.kickoff <= window_end:
-                seen.add(g.espn_id)
-                games.append(g)
-    return sorted(games, key=lambda g: g.kickoff)
+    if any(g.status != "post" for g in current_games):
+        this_key, this_games = (season_type, week), current_games
+    else:
+        this_key, this_games = _following(league, season_type, week)
+    next_key, next_games = _following(league, *this_key)
+    return LeagueWeeks(
+        this=_week(*this_key, this_games),
+        next=_week(*next_key, next_games),
+    )

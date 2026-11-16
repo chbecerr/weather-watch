@@ -16,28 +16,49 @@ from .scoring import score
 from .site import UnhealthyData, build_payload, write_payload
 
 
-def build_report(leagues: list[str], days: int) -> list[dict]:
-    games: list[games_mod.Game] = []
+LEAGUE_NAMES = {"NFL": "NFL", "CFB": "College"}
+
+
+def build_report(leagues: list[str], weeks: tuple[str, ...] = ("this", "next")):
+    """Rows for the requested weeks, plus week labels and counts of games left out.
+
+    Returns (rows, week_info, hidden):
+      rows       games with a forecast (and indoor games), most extreme first
+      week_info  {week: {league: {"label", "first", "last"}}}
+      hidden     {week: outdoor games left out because NWS has no forecast for them}
+    """
+    tagged: list[tuple[str, games_mod.Game]] = []
+    week_info: dict[str, dict] = {w: {} for w in weeks}
     failures: list[Exception] = []
     for lg in leagues:
         try:
-            games.extend(games_mod.fetch_games(lg, days=days))
+            lw = games_mod.fetch_weeks(lg)
         except Exception as err:  # one league failing shouldn't sink the other
             failures.append(err)
             print(f"warning: couldn't load {lg.upper()} schedule: {err}", file=sys.stderr)
+            continue
+        for key in weeks:
+            wg = getattr(lw, key)
+            week_info[key][lg.upper()] = {
+                "label": wg.label,
+                "first": wg.first.isoformat() if wg.first else None,
+                "last": wg.last.isoformat() if wg.last else None,
+            }
+            tagged.extend((key, g) for g in wg.games)
     if failures and len(failures) == len(leagues):
         raise failures[0]
 
-    outdoor = [g for g in games if not g.indoor]
-    places = {(g.city, g.state, g.country) for g in outdoor}
+    places = {(g.city, g.state, g.country) for _, g in tagged if not g.indoor}
     coords = wx.geocode_many(places)
-
     points = sorted({c for c in coords.values() if c})
-    forecasts = nws.fetch_forecasts(points)
+    forecasts = nws.fetch_forecasts(points) if points else {}
 
     rows = []
-    for g in games:
+    hidden = {w: 0 for w in weeks}
+    for key, g in tagged:
         row = {
+            "week": key,
+            "week_label": week_info[key][g.league.upper()]["label"],
             "league": g.league.upper(),
             "game": g.short_name,
             "matchup": g.name,
@@ -60,27 +81,26 @@ def build_report(leagues: list[str], days: int) -> list[dict]:
             fc = forecasts.get(c) if c else None
             w = wx.summarize_window(fc, g.kickoff) if fc else None
             if w is None:
-                row["note"] = "no NWS forecast (outside the US, or too far out)"
-                row["score"] = None
-            else:
-                s = score(w)
-                row.update(score=s.total, factors=s.parts, tags=s.tags)
-                row["weather"] = {
-                    "temp_f": round(w.temp_f),
-                    "feels_like_min_f": round(w.feels_min_f),
-                    "feels_like_max_f": round(w.feels_max_f),
-                    "wind_mph": round(w.wind_mph),
-                    "gust_mph": round(w.gust_mph),
-                    "rain_in": round(w.rain_in, 2),
-                    "snow_in": round(w.snow_in, 1),
-                    "conditions": w.conditions,
-                }
-                if not g.time_known:
-                    row["note"] = "kickoff time TBA; forecast uses placeholder time"
+                hidden[key] += 1  # no forecast: leave the game out
+                continue
+            s_ = score(w)
+            row.update(score=s_.total, factors=s_.parts, tags=s_.tags)
+            row["weather"] = {
+                "temp_f": round(w.temp_f),
+                "feels_like_min_f": round(w.feels_min_f),
+                "feels_like_max_f": round(w.feels_max_f),
+                "wind_mph": round(w.wind_mph),
+                "gust_mph": round(w.gust_mph),
+                "rain_in": round(w.rain_in, 2),
+                "snow_in": round(w.snow_in, 1),
+                "conditions": w.conditions,
+            }
+            if not g.time_known:
+                row["note"] = "kickoff time TBA; forecast uses placeholder time"
         rows.append(row)
 
-    rows.sort(key=lambda r: (r["score"] is None, -(r["score"] or 0), r["kickoff_utc"]))
-    return rows
+    rows.sort(key=lambda r: (-(r["score"] or 0), r["kickoff_utc"]))
+    return rows, week_info, hidden
 
 
 def _fmt_kickoff(iso: str, tz: ZoneInfo, tba: bool) -> str:
@@ -88,9 +108,11 @@ def _fmt_kickoff(iso: str, tz: ZoneInfo, tba: bool) -> str:
     return dt.strftime("%a %m/%d") + ("   TBA" if tba else dt.strftime(" %I:%M%p").lower().replace(" 0", "  "))
 
 
-def print_table(rows: list[dict], tz: ZoneInfo) -> None:
+def print_table(rows: list[dict], tz: ZoneInfo, week_info: dict, hidden: int = 0) -> None:
     if not rows:
-        print("No games found.")
+        print("No games with a forecast yet.")
+        if hidden:
+            print(f"({hidden} game{'s' if hidden != 1 else ''} not shown: no forecast yet)")
         return
     header = (
         f"{'#':>3}  {'Score':>5}  {'Lg':<3}  {'Game':<11}  {'Kickoff':<16}  "
@@ -122,13 +144,21 @@ def print_table(rows: list[dict], tz: ZoneInfo) -> None:
             f"{_fmt_kickoff(r['kickoff_utc'], tz, r['time_tba']):<16}  {wx_cols}  {venue}"
         )
     print("\nTemp = at kickoff; Feel = coldest feels-like during the game; Wind = max sustained g gust (mph).")
-    print("Forecast: US National Weather Service (US venues only, about 7 days ahead).")
+    labels = " · ".join(f"{LEAGUE_NAMES.get(lg, lg)} {info['label']}" for lg, info in week_info.items())
+    print(f"Showing: {labels}")
+    if hidden:
+        print(f"{hidden} game{'s' if hidden != 1 else ''} not shown: no forecast yet (US National Weather Service looks about 7 days ahead).")
+    else:
+        print("Forecast: US National Weather Service (US venues only, about 7 days ahead).")
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="weather-watch", description=__doc__)
     p.add_argument("--league", choices=["nfl", "cfb", "all"], default="all")
-    p.add_argument("--days", type=int, default=7, help="look-ahead window in days (default 7, max 7)")
+    p.add_argument(
+        "--week", choices=["this", "next"], default="this",
+        help="football week to show, using ESPN's weeks (default: this)",
+    )
     p.add_argument("--top", type=int, default=0, help="only show the N most extreme games")
     p.add_argument("--include-indoor", action="store_true", help="also list dome/indoor games")
     p.add_argument("--tz", default="America/New_York", help="timezone for kickoff times")
@@ -137,8 +167,9 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     leagues = ["nfl", "cfb"] if args.league == "all" else [args.league]
+    weeks = ("this", "next") if args.site_data else (args.week,)
     try:
-        rows = build_report(leagues, days=min(max(args.days, 1), 7))
+        rows, week_info, hidden = build_report(leagues, weeks)
     except NetworkError as err:
         print(f"error: {err}", file=sys.stderr)
         print(
@@ -147,16 +178,17 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
+
     if args.site_data:
-        days = min(max(args.days, 1), 7)
         try:
-            payload = build_payload(rows, days)
+            payload = build_payload(rows, week_info, hidden)
         except UnhealthyData as err:
             print(f"error: not writing {args.site_data}: {err}", file=sys.stderr)
             return 1
         write_payload(payload, args.site_data)
         print(f"wrote {len(rows)} games to {args.site_data}", file=sys.stderr)
         return 0
+
     if not args.include_indoor:
         rows = [r for r in rows if not r["indoor"]]
     if args.top:
@@ -166,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dump(rows, sys.stdout, indent=2)
         print()
     else:
-        print_table(rows, ZoneInfo(args.tz))
+        print_table(rows, ZoneInfo(args.tz), week_info[args.week], hidden[args.week])
     return 0
 
 

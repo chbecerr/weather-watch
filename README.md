@@ -17,7 +17,8 @@ Pure Python standard library, no API keys. Network access needed to `site.api.es
 ## Usage
 
 ```bash
-python3 -m weather_watch                 # all outdoor NFL + FBS games in the next 7 days
+python3 -m weather_watch                 # this week's outdoor NFL + FBS games
+python3 -m weather_watch --week next     # next week's (late-week games may have no forecast yet)
 python3 -m weather_watch --top 10        # just the 10 nastiest
 python3 -m weather_watch --league nfl    # nfl | cfb | all
 python3 -m weather_watch --include-indoor --tz America/Chicago
@@ -29,21 +30,25 @@ Or install it with `pip install .` and run `weather-watch`.
 ## How it works
 
 1. **Games**: ESPN's public scoreboard API (`site.api.espn.com`). FBS is
-   ESPN group 80. The API doesn't take date ranges for football, so the tool
-   loads the current week and the next one, then keeps games that kick off in
-   the next `--days` days (plus any game in progress). Finished games are dropped.
+   ESPN group 80. Weeks are ESPN's own (NFL Thursday to Monday-night games,
+   college Tuesday to Saturday). "This week" is ESPN's current week; once every
+   game in it has been played (NFL on Tuesday and Wednesday) it moves on to the
+   following week. On a Monday that means NFL's "this week" is just that night's
+   game. Finished games are dropped.
 2. **Location**: the venue city is geocoded with Open-Meteo's geocoder and
    cached in `~/.cache/weather-watch/geocode.json`, so later runs skip this step.
 3. **Weather**: hourly forecasts from the US National Weather Service
    (`api.weather.gov`, no key needed), which covers US venues about 7 days
-   ahead. The tool looks at the 4 hours starting at kickoff. Games outside the
-   US (or more than ~7 days out) show "no NWS forecast".
+   ahead. The tool looks at the 4 hours starting at kickoff. Games with no
+   forecast (outside the US, or more than ~7 days out) are left out; the table
+   and the website say how many.
 4. **Indoor venues** (ESPN's `indoor` flag, plus SoFi Stadium) are skipped by default.
 
 ## Website
 
 `docs/` is a static site (plain HTML/CSS/JS, no build step) that shows the
-rankings as a sortable, filterable list that works on phones.
+rankings as a sortable, filterable list that works on phones, with a
+This week / Next week switch.
 
 - A GitHub Actions workflow (`.github/workflows/pages.yml`) runs the tool every
   3 hours with `--site-data docs/data.json` and publishes `docs/` to GitHub Pages.
