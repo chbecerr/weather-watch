@@ -257,7 +257,8 @@ h1 { margin: 0; font-size: 1.6rem; letter-spacing: -0.01em; }
 .mapdot:hover, .mapdot:focus { stroke-width: 2.4; outline: none; }
 .mapdot.selected { stroke-width: 3; stroke: var(--accent); }
 .mapdot.dimmed { opacity: 0.3; }
-.maptip { position: absolute; transform: translate(-50%, calc(-100% - 12px)); background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; font-size: 0.82rem; box-shadow: 0 2px 8px rgba(0,0,0,.2); pointer-events: none; white-space: nowrap; z-index: 2; }
+.maptip.below { transform: translate(-50%, 14px); }
+.maptip { position: absolute; transform: translate(-50%, calc(-100% - 12px)); background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; font-size: 0.82rem; box-shadow: 0 2px 8px rgba(0,0,0,.2); pointer-events: none; white-space: normal; max-width: calc(100% - 8px); width: max-content; z-index: 2; }
 .legend { margin: 12px 4px 0; max-width: 420px; }
 .legendbar { height: 10px; border-radius: 99px; border: 1px solid var(--line); }
 .legendticks { position: relative; height: 1.3em; font-size: 0.75rem; color: var(--muted); }

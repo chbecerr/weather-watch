@@ -444,8 +444,15 @@ function showTip(id, x, y) {
   const lens = window.WeatherMap.LENSES[state.lens];
   tip.replaceChildren(el("strong", { text: g.matchup }), el("br"), `${lens.format(lens.value(g.weather))} · ${timeFmt.format(g.kickoff)}`);
   tip.hidden = false;
-  tip.style.left = `${(x / 975) * 100}%`;
-  tip.style.top = `${(y / 610) * 100}%`;
+  // Keep the whole tooltip inside the map: slide it sideways near the edges, and put it below the dot near the top.
+  const stage = $("mapStage").getBoundingClientRect();
+  const px = (x / 975) * stage.width, py = (y / 610) * stage.height;
+  const half = Math.min(tip.offsetWidth, stage.width) / 2;
+  const left = Math.max(half + 4, Math.min(stage.width - half - 4, px));
+  const below = py - tip.offsetHeight - 16 < 0;
+  tip.classList.toggle("below", below);
+  tip.style.left = `${left}px`;
+  tip.style.top = `${py}px`;
 }
 
 function selectMapGame(id) {
