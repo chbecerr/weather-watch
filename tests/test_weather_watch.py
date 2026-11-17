@@ -698,6 +698,82 @@ class ScoreVersionTests(unittest.TestCase):
                 self.assertEqual(bool(history.load_previous(path)), expect_kept, name)
 
 
+class HistorySeedTests(unittest.TestCase):
+    def write(self, directory, payload, name="seed.json"):
+        import json, os
+        path = os.path.join(directory, name)
+        with open(path, "w") as fh:
+            fh.write(payload if isinstance(payload, str) else json.dumps(payload))
+        return path
+
+    def seed(self, **overrides):
+        data = {"score_version": SCORE_VERSION, "samples": [
+            {"at": iso(20), "scores": {"nfl:1": 12.5, "cfb:2": 30}},
+            {"at": iso(30), "scores": {"nfl:1": 11.0}},
+        ]}
+        data.update(overrides)
+        return data
+
+    def test_load_seed_reads_every_game_oldest_first(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            got = history.load_seed(self.write(d, self.seed()))
+        self.assertEqual(got["nfl:1"], [[iso(30), 11.0], [iso(20), 12.5]])
+        self.assertEqual(got["cfb:2"], [[iso(20), 30.0]])
+
+    def test_a_seed_from_another_score_version_or_that_is_unreadable_gives_nothing(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(history.load_seed(self.write(d, self.seed(score_version=SCORE_VERSION - 1), "old.json")), {})
+            self.assertEqual(history.load_seed(self.write(d, {"samples": []}, "unversioned.json")), {})
+            self.assertEqual(history.load_seed(self.write(d, "{not json", "bad.json")), {})
+        self.assertEqual(history.load_seed("/nonexistent/seed.json"), {})
+        self.assertEqual(history.load_seed(None), {})
+
+    def test_bad_entries_are_skipped_without_losing_the_good_ones(self):
+        import tempfile
+        payload = self.seed(samples=[
+            {"at": "not a date", "scores": {"nfl:1": 1.0}},
+            {"scores": {"nfl:1": 2.0}},
+            {"at": iso(20), "scores": {"nfl:1": "high", "cfb:2": True, "cfb:3": 7.5}},
+        ])
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(history.load_seed(self.write(d, payload)), {"cfb:3": [[iso(20), 7.5]]})
+
+    def test_merge_fills_gaps_and_real_samples_win(self):
+        previous = {"nfl:1": [[iso(10), 5.0], [iso(2), 6.0]]}
+        seed = {"nfl:1": [[iso(20), 4.0], [iso(11), 99.0]],   # 11h ago is within 2h of the real 10h sample
+                "cfb:2": [[iso(20), 8.0]]}                     # only in the seed
+        got = history.merge(previous, seed)
+        self.assertEqual(got["nfl:1"], [[iso(20), 4.0], [iso(10), 5.0], [iso(2), 6.0]])
+        self.assertEqual(got["cfb:2"], [[iso(20), 8.0]])
+
+    def test_merge_tolerates_garbage_in_either_history(self):
+        got = history.merge({"nfl:1": [["junk", 1], [iso(5), 2.0]]}, {"nfl:1": [[iso(20), 3.0], None]})
+        self.assertEqual(got["nfl:1"], [[iso(20), 3.0], [iso(5), 2.0]])
+
+    def test_seeded_history_gives_a_trend_against_a_baseline_a_day_old(self):
+        merged = history.merge({"nfl:1": [[iso(1), 20.0]]}, {"nfl:1": [[iso(21), 5.0]]})
+        row = {"id": "nfl:1", "weather": {"temp_f": 1}, "score": 30.0}
+        history.apply([row], merged, T0)
+        self.assertEqual(row["trend"], {"delta": 25.0, "hours": 21, "prev": 5.0})
+
+    def test_the_committed_seed_is_well_formed_when_it_applies(self):
+        import json, os, re
+        path = os.path.join(os.path.dirname(__file__), "..", "data", "history-seed.json")
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if data.get("score_version") != SCORE_VERSION:
+            self.skipTest("seed is for another score version, so it is ignored (safe to delete)")
+        seed = history.load_seed(path)
+        self.assertGreater(len(seed), 50)
+        for game_id, samples in seed.items():
+            self.assertRegex(game_id, r"^(nfl|cfb|fcs):\d+$")
+            for at, value in samples:
+                self.assertTrue(0 <= value < 300, (game_id, value))
+                self.assertIsNotNone(history._when([at]))
+
+
 class SiteDataTests(unittest.TestCase):
     def row(self, week="this", indoor=False):
         return {"week": week, "indoor": indoor, "weather": None if indoor else {"temp_f": 50}}

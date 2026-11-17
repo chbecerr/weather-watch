@@ -16,7 +16,8 @@ from .http import NetworkError
 from .pleasantness import band, pleasantness
 from .scoring import score
 from .solar import daylight_fraction
-from .history import load_previous
+from .history import NOTABLE_MOVE, load_previous, load_seed
+from .history import merge as merge_history
 from .site import SOON_DAYS, UnhealthyData, build_payload, write_payload
 
 
@@ -209,6 +210,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--json", action="store_true", help="emit JSON instead of a table")
     p.add_argument("--site-data", metavar="PATH", help="write the website's data file (all games) to PATH")
     p.add_argument(
+        "--seed", metavar="PATH",
+        help="with --site-data: extra earlier scores to start the history from (data/history-seed.json)",
+    )
+    p.add_argument(
         "--previous", metavar="PATH",
         help="with --site-data: the previously published data file, used to carry score history forward",
     )
@@ -228,15 +233,25 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.site_data:
+        previous = load_previous(args.previous)
+        if args.seed:
+            seed = load_seed(args.seed)
+            if seed:
+                previous = merge_history(previous, seed)
+                print(f"seeded score history for {len(seed)} games from {args.seed}", file=sys.stderr)
         try:
-            payload = build_payload(
-                rows, week_info, hidden, previous=load_previous(args.previous), hidden_soon=hidden_soon
-            )
+            payload = build_payload(rows, week_info, hidden, previous=previous, hidden_soon=hidden_soon)
         except UnhealthyData as err:
             print(f"error: not writing {args.site_data}: {err}", file=sys.stderr)
             return 1
         write_payload(payload, args.site_data)
-        print(f"wrote {len(rows)} games to {args.site_data}", file=sys.stderr)
+        trends = [g["trend"] for g in payload["games"] if g.get("trend")]
+        notable = sum(1 for t in trends if abs(t["delta"]) >= NOTABLE_MOVE)
+        print(
+            f"wrote {len(rows)} games to {args.site_data} "
+            f"({len(trends)} compared with an earlier score, {notable} moved {NOTABLE_MOVE:g}+ points)",
+            file=sys.stderr,
+        )
         return 0
 
     if not args.include_indoor:

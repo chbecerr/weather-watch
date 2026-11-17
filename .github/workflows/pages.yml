@@ -60,7 +60,7 @@ jobs:
 
       # Fails (and keeps the previous site) if the forecast source is down.
       - name: Build data file
-        run: python -m weather_watch --site-data docs/data.json --previous previous-data.json
+        run: python -m weather_watch --site-data docs/data.json --previous previous-data.json --seed data/history-seed.json
 
       - uses: actions/upload-pages-artifact@v5
         with:
