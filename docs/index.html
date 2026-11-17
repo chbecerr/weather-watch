@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Weather Watch</title>
-  <meta name="description" content="This week's NFL, FBS and FCS games ranked by how extreme the weather is at the stadium.">
+  <meta name="description" content="This week's NFL, FBS and FCS games ranked by how extreme, or how pleasant, the weather is at the stadium.">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8C%AA%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -12,13 +12,21 @@
   <header class="top">
     <div class="wrap">
       <h1>Weather Watch</h1>
-      <p class="tagline">This week's NFL, FBS and FCS games, ranked by how extreme the weather is at the stadium.</p>
+      <p class="tagline">This week's NFL, FBS and FCS games, ranked by how extreme, or how pleasant, the weather is at the stadium.</p>
       <p class="updated" id="updated" aria-live="polite">Loading…</p>
     </div>
   </header>
 
   <main class="wrap">
     <div id="stale" class="banner" hidden></div>
+
+    <section class="modebar" aria-label="Ranking">
+      <div class="seg" role="group" aria-label="Ranking" id="mode">
+        <button type="button" data-v="wild" aria-pressed="true">Wildest weather</button>
+        <button type="button" data-v="nice" aria-pressed="false">Nicest weather</button>
+      </div>
+      <p class="modenote" id="modeNote"></p>
+    </section>
 
     <section class="weekbar" aria-label="Week">
       <div class="seg" role="group" aria-label="Week" id="week">
@@ -50,7 +58,7 @@
         </label>
         <label class="check">
           <input id="showAll" type="checkbox">
-          <span>Show indoor games</span>
+          <span>Include dome games</span>
         </label>
       </div>
     </section>
@@ -58,6 +66,7 @@
     <section class="events" aria-label="Weather events">
       <span class="events-label" id="eventsLabel">Weather</span>
       <div class="chips" id="eventChips" role="group" aria-labelledby="eventsLabel"></div>
+      <div class="chips" id="niceChips" role="group" aria-labelledby="eventsLabel" hidden></div>
       <button type="button" class="linkbtn" id="clearEvents" hidden>Clear</button>
     </section>
 
@@ -81,6 +90,7 @@
     <p><strong>How to read it.</strong> The score adds points for cold, heat, wind, rain, snow and thunderstorms, only past a comfort level, so a calm, dry, mild game scores 0. Click a game to see the breakdown. As a rough guide, about 15 points is noticeable (20 mph sustained wind, feels-like 20°F, 1″ of snow), about 40 is severe (30 mph wind, feels-like 5°F, 3″ of snow), and 80 or more is extreme (40 mph wind, feels-like −15°F, 6″ of snow). A ▲ or ▼ shows how much the score has moved since about a day ago as forecasts updated; it appears for moves of 5 points or more, once the site has a few hours of history. To follow a team, open one of its games and tap its star; "Only my teams" then filters the list (saved in this browser only).</p>
     <p>Weeks follow ESPN's schedule weeks, and finished games are dropped. Games with no forecast yet, because they are more than about 7 days out or outside the US, are left out.</p>
     <p><strong>Weather filters</strong> show games forecast to have, at some point during the game: wind over 10 mph (sustained), feels-like 32° or colder, feels-like 90° or hotter, 0.05″ or more of rain, 0.1″ or more of snow, thunderstorms, or a 50% or higher chance of precipitation. Pick several to see games matching any of them. The number on each chip is how many of the games you're looking at match it. The chance of precipitation is the Weather Service's, as its highest value during the game; it doesn't change the score.</p>
+    <p><strong>Nicest weather</strong> scores how pleasant it is to sit in the stands for three hours, from 0 to 100, starting at 100 and subtracting points. It is not the wildness score upside down: most games are completely calm by that measure, so flipping it would tie dozens of them. The best temperature is a feels-like of 60 to 72°F, scored hour by hour; heat costs more than the same distance of cold, because you can add layers but not remove them. Wind costs from about 6 mph, a chance of rain or snow and the amount both count (thunderstorms extra), and overcast skies cost a little, but only while the sun is up. As a rough guide: 95 or more is great (essentially the ideal range), 80 to 94 is nice (a cool evening, a breeze, a hint of rain), 60 to 79 is meh, and under 60 is rough. Dome games are climate controlled, so they have no pleasantness score; tick "Include dome games" to list them at the bottom. These are judgment calls, not measurements.</p>
     <p>Temp is at kickoff; "feels" is the coldest feels-like during the game; wind is the top sustained speed with the top gust beneath it. Forecasts are for the stadium's city and come from the US National Weather Service, so they cover US venues about 7 days ahead and get less certain the further out the game is.</p>
     <p><a href="https://github.com/chbecerr/weather-watch">Source on GitHub</a></p>
   </footer>

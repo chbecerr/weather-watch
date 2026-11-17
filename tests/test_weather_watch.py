@@ -279,8 +279,15 @@ class PleasantnessTests(unittest.TestCase):
         self.assertEqual(self.total(clouds=0, feels=66), 100.0)
 
     def test_bands(self):
-        for value, name in ((100, "great"), (85, "great"), (84.9, "nice"), (70, "nice"), (69.9, "meh"), (50, "meh"), (49.9, "rough"), (0, "rough")):
+        for value, name in ((100, "great"), (95, "great"), (94.9, "nice"), (80, "nice"), (79.9, "meh"), (60, "meh"), (59.9, "rough"), (0, "rough")):
             self.assertEqual(band(value), name, value)
+
+    def test_a_cool_night_game_is_nice_not_great_and_the_reference_conditions_land_in_sensible_bands(self):
+        # feels-like 47F, calm, dry, night: the case that showed the first bands were too generous
+        self.assertEqual(pleasantness(wxp(feels=47), daylight=0.0).band, "nice")
+        for kwargs, expected in ((dict(feels=66), "great"), (dict(feels=55), "great"), (dict(feels=50), "nice"), (dict(feels=40), "meh"),
+                                 (dict(feels=32), "meh"), (dict(feels=20), "rough"), (dict(feels=90), "rough"), (dict(feels=82), "nice")):
+            self.assertEqual(pleasantness(wxp(**kwargs), 0.0).band, expected, kwargs)
 
 
 class SolarTests(unittest.TestCase):

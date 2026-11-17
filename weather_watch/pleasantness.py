@@ -21,7 +21,10 @@ more than the same distance of cold. Start at 100 and subtract:
     68°F, 15 mph sustained wind with 25 mph gusts                              about 75
     68°F, 0.3" of rain: with no chance of rain given / with a 60% chance       70 / 65
 
-Bands used on the site: 85+ great, 70-84 nice, 50-69 meh, under 50 rough.
+Bands used on the site: 95+ great (essentially the ideal range, at most a minor catch),
+80-94 nice (cool, breezy, a hint of rain or an overcast sky), 60-79 meh (noticeably cold,
+hot, windy or damp), under 60 rough. They were set so that a 47°F night game is "nice",
+not "great"; an earlier cut at 85 called two thirds of a mild week's games "great".
 
 Like the extremeness score, the reference points are judgment calls: there is no ground
 truth for "pleasant". They live here, in one place, and the tests pin them down. Dome
@@ -66,7 +69,7 @@ def _combine(a: float, b: float) -> float:
 
 
 def band(total: float) -> str:
-    return "great" if total >= 85 else "nice" if total >= 70 else "meh" if total >= 50 else "rough"
+    return "great" if total >= 95 else "nice" if total >= 80 else "meh" if total >= 60 else "rough"
 
 
 @dataclass

@@ -2,7 +2,10 @@
 
 const STALE_HOURS = 12;
 const TREND_MIN_MOVE = 5; // points; smaller moves are noise
-const FACTOR_LABELS = { wind: "Wind", cold: "Cold", heat: "Heat", rain: "Rain", snow: "Snow", storm: "Storm" };
+const FACTOR_LABELS = {
+  wind: "Wind", cold: "Cold", heat: "Heat", rain: "Rain", snow: "Snow", storm: "Storm",
+  temp: "Temperature", precip: "Precipitation", clouds: "Clouds",
+};
 const $ = (id) => document.getElementById(id);
 
 const LEAGUE_NAMES = { NFL: "NFL", CFB: "FBS", FCS: "FCS" };
@@ -19,7 +22,22 @@ const EVENTS = [
   { key: "storm", label: "Storms", color: "storm", tip: "Thunderstorms in the forecast", test: (w) => /thunder/i.test(w.conditions || "") },
   { key: "likely", label: "Precip likely", color: "rain", tip: "A 50% or higher chance of rain or snow", test: (w) => (w.precip_chance ?? 0) >= 50 },
 ];
+// Filters for the "Nicest weather" view. Each test also gets the whole game (for daylight and the score).
+const NICE = [
+  { key: "great", label: "Great", color: "nice", tip: "Pleasantness 95 or higher", test: (w, g) => g.pleasant != null && g.pleasant >= 95 },
+  { key: "mild", label: "Mild", color: "nice", tip: "Feels like 55° to 75° the whole game", test: (w) => w.feels_like_min_f >= 55 && w.feels_like_max_f <= 75 },
+  { key: "sunny", label: "Sunny", color: "nice", tip: "Mostly in daylight, with 35% cloud cover or less", test: (w, g) => (g.daylight ?? 0) >= 0.5 && w.cloud_cover != null && w.cloud_cover <= 35 },
+  { key: "calm", label: "Calm", color: "nice", tip: "Sustained wind under 8 mph and gusts under 15", test: (w) => w.wind_mph < 8 && w.gust_mph < 15 },
+  { key: "dry", label: "Dry", color: "nice", tip: "Under a 20% chance of precipitation, and none forecast", test: (w) => (w.precip_chance ?? 0) < 20 && w.rain_in < 0.01 && w.snow_in < 0.01 },
+];
+const MODE_NOTES = {
+  wild: "Ranked by how extreme the weather is: wind, cold, heat, rain, snow and storms.",
+  nice: "Ranked by how pleasant it is to sit in the stands, from 0 to 100: mild, calm, dry and sunny scores highest.",
+};
+const niceBand = (v) => (v >= 95 ? "great" : v >= 80 ? "nice" : v >= 60 ? "meh" : "rough");
+
 const state = {
+  mode: "wild", nice: new Set(),
   games: [], info: {}, hidden: {}, week: "this", autoNext: false,
   league: "all", day: "all", q: "", showAll: false, sort: "score", dir: "desc",
   favs: new Set(), mine: false, open: new Set(), events: new Set(),
@@ -97,16 +115,18 @@ function matchesBase(g) {
   return true;
 }
 
-const matchesEvent = (g, ev) => Boolean(g.weather) && ev.test(g.weather);
+const matchesEvent = (g, ev) => Boolean(g.weather) && ev.test(g.weather, g);
+const chipDefs = () => (state.mode === "nice" ? NICE : EVENTS);
+const chipSelection = () => (state.mode === "nice" ? state.nice : state.events);
 
 // Picking several chips shows games that match any of them.
 function visible() {
-  const picked = EVENTS.filter((e) => state.events.has(e.key));
+  const picked = chipDefs().filter((e) => chipSelection().has(e.key));
   return state.games.filter((g) => matchesBase(g) && (!picked.length || picked.some((e) => matchesEvent(g, e))));
 }
 
 const SORTS = {
-  score: (g) => g.score,
+  score: (g) => (state.mode === "nice" ? g.pleasant : g.score), // the score of whichever view is showing
   game: (g) => g.game.toLowerCase(),
   kickoff: (g) => g.kickoff.getTime(),
   temp: (g) => g.sortTemp,
@@ -124,7 +144,8 @@ function sorted(list) {
     if (x == null && y == null) return a.kickoff - b.kickoff;
     if (x == null) return 1; // games without data always sink to the bottom
     if (y == null) return -1;
-    return (x < y ? -1 : x > y ? 1 : a.kickoff - b.kickoff) * sign;
+    const order = x < y ? -1 : x > y ? 1 : 0;
+    return order ? order * sign : a.kickoff - b.kickoff; // equal scores: earliest kickoff first, whichever way it's sorted
   });
 }
 
@@ -222,11 +243,17 @@ function renderGame(g, maxScore) {
   const w = g.weather;
   const li = el("li", { class: "game", "data-id": g.id });
 
-  const score = el("span", { class: "score " + (g.hasScore ? severity(g.score) : "noscore") });
-  score.append(el("span", { class: "num", text: g.hasScore ? g.score.toFixed(1) : "–" }));
-  if (g.hasScore) {
-    if (g.trend && Math.abs(g.trend.delta) >= TREND_MIN_MOVE) score.append(trendChip(g.trend));
-    const pct = Math.max(2, Math.min(100, (g.score / maxScore) * 100));
+  const nice = state.mode === "nice";
+  const value = nice ? g.pleasant : g.score;
+  const hasValue = g.hasScore && value != null;
+  const score = el("span", {
+    class: "score " + (hasValue ? (nice ? `band-${niceBand(value)}` : severity(value)) : "noscore"),
+    title: hasValue && g.pleasant != null ? `Pleasantness ${g.pleasant.toFixed(1)} · Wildness ${g.score.toFixed(1)}` : null,
+  });
+  score.append(el("span", { class: "num", text: hasValue ? value.toFixed(1) : "–" }));
+  if (hasValue) {
+    if (!nice && g.trend && Math.abs(g.trend.delta) >= TREND_MIN_MOVE) score.append(trendChip(g.trend));
+    const pct = nice ? Math.max(2, Math.min(100, value)) : Math.max(2, Math.min(100, (g.score / maxScore) * 100));
     score.append(el("span", { class: "bar", "aria-hidden": "true" }, el("i", { style: `width:${pct}%` })));
   }
 
@@ -252,8 +279,10 @@ function renderGame(g, maxScore) {
     stats.append(el("span", { class: "stat", "data-label": "Weather" }, el("span", { text: g.indoor ? "Indoor" : "No forecast" })));
   }
   if (g.status === "in") flags.append(el("span", { class: "chip LIVE", text: "LIVE" }));
+  if (g.indoor) flags.append(el("span", { class: "chip NOTE", text: "DOME", title: "Indoor stadium: climate controlled, so there is no weather to score" }));
   if (g.time_tba) flags.append(el("span", { class: "chip NOTE", text: "TIME TBA", title: "Kickoff time not set yet; the forecast uses ESPN's placeholder time" }));
-  for (const t of g.tags || []) flags.append(el("span", { class: "chip " + t, text: t }));
+  if (nice && hasValue) flags.append(el("span", { class: "chip " + niceBand(value).toUpperCase(), text: niceBand(value).toUpperCase() }));
+  if (!nice) for (const t of g.tags || []) flags.append(el("span", { class: "chip " + t, text: t }));
 
   const detail = renderDetail(g);
   const startOpen = state.open.has(g.id);
@@ -270,21 +299,26 @@ function renderGame(g, maxScore) {
 }
 
 function renderDetail(g) {
+  const nice = state.mode === "nice";
   const d = el("div", { class: "detail" });
   d.append(el("p", { text: g.matchup }));
   if (g.weather) {
     d.append(el("p", { class: "muted", text: `${g.weather.conditions}. Feels like ${g.weather.feels_like_min_f}° to ${g.weather.feels_like_max_f}° during the game.${g.weather.precip_chance != null ? ` Up to a ${g.weather.precip_chance}% chance of precipitation.` : ""}` }));
   }
+  if (g.pleasant != null) {
+    d.append(el("p", { text: `Pleasantness ${g.pleasant.toFixed(1)} (${niceBand(g.pleasant)}) · Wildness ${g.score.toFixed(1)}` }));
+  }
   const hourly = timeline(g.weather && g.weather.hourly);
   if (hourly) d.append(hourly);
-  if (g.trend) {
+  if (g.trend && !nice) {
     const move = Math.abs(g.trend.delta) < 0.5 ? "unchanged" : `${g.trend.delta > 0 ? "up" : "down"} ${Math.abs(g.trend.delta).toFixed(1)}`;
     d.append(el("p", { text: `Score ${g.score.toFixed(1)} now, ${g.trend.prev.toFixed(1)} about ${g.trend.hours} hours ago (${move}).` }));
   }
-  const spark = sparkline(g.history);
+  const spark = nice ? null : sparkline(g.history);
   if (spark) d.append(el("div", { class: "sparkwrap" }, el("span", { class: "muted", text: "Score history" }), spark));
-  const entries = Object.entries(g.factors || {}).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+  const entries = Object.entries((nice ? g.pleasant_parts : g.factors) || {}).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
   if (entries.length) {
+    if (nice) d.append(el("p", { class: "muted", text: "Where the points went (lost out of 100)" }));
     const top = Math.max(...entries.map(([, v]) => v));
     d.append(el("ul", { class: "factors" }, entries.map(([k, v]) =>
       el("li", { class: k.toUpperCase() },
@@ -292,7 +326,15 @@ function renderDetail(g) {
         el("span", { class: "track", "aria-hidden": "true" }, el("i", { class: "fill", style: `width:${(v / top) * 100}%` })),
         el("span", { class: "pts", text: `${v.toFixed(1)}` })))));
   } else if (g.weather) {
-    d.append(el("p", { class: "muted", text: "Nothing crossed a comfort threshold, so this game scores 0." }));
+    d.append(el("p", { class: "muted", text: nice
+      ? "Nothing cost points, so this is about as nice as weather gets."
+      : "Nothing crossed a comfort threshold, so this game scores 0." }));
+  }
+  if (nice && g.weather && g.daylight != null && g.weather.cloud_cover != null) {
+    const clouds = `${g.weather.cloud_cover}% cloud cover`;
+    d.append(el("p", { class: "muted", text: g.daylight === 0
+      ? `A night game, so cloud cover (${clouds}) doesn't count.`
+      : g.daylight < 1 ? `The sun is up for part of the game, so cloud cover (${clouds}) counts partly.` : `In daylight, so cloud cover (${clouds}) counts.` }));
   }
   if (g.note) d.append(el("p", { class: "muted", text: g.note }));
 
@@ -317,9 +359,8 @@ function renderDetail(g) {
   return d;
 }
 
-function buildEventChips() {
-  const box = $("eventChips");
-  for (const ev of EVENTS) {
+function buildChips(box, defs, selection) {
+  for (const ev of defs) {
     const chip = el("button", { type: "button", class: "evchip", "data-ev": ev.key, "aria-pressed": "false", title: ev.tip },
       el("span", { text: ev.label }), " ", el("span", { class: "n", text: "0" }));
     chip.style.setProperty("--c", `var(--c-${ev.color})`);
@@ -328,25 +369,45 @@ function buildEventChips() {
   box.addEventListener("click", (e) => {
     const chip = e.target.closest("button[data-ev]");
     if (!chip || chip.disabled) return;
+    const picked = selection();
     const k = chip.dataset.ev;
-    if (state.events.has(k)) state.events.delete(k); else state.events.add(k);
+    if (picked.has(k)) picked.delete(k); else picked.add(k);
     render();
   });
-  $("clearEvents").addEventListener("click", () => { state.events.clear(); render(); });
+}
+
+function buildEventChips() {
+  buildChips($("eventChips"), EVENTS, () => state.events);
+  buildChips($("niceChips"), NICE, () => state.nice);
+  $("clearEvents").addEventListener("click", () => { chipSelection().clear(); render(); });
 }
 
 function syncEventChips() {
   const pool = state.games.filter(matchesBase);
-  for (const chip of document.querySelectorAll("#eventChips .evchip")) {
-    const ev = EVENTS.find((e) => e.key === chip.dataset.ev);
-    const n = pool.filter((g) => matchesEvent(g, ev)).length;
-    const on = state.events.has(ev.key);
-    chip.querySelector(".n").textContent = String(n);
-    chip.setAttribute("aria-pressed", String(on));
-    chip.disabled = n === 0 && !on; // never strand someone in a dead end, but let them undo a pick
-    chip.title = chip.disabled ? `${ev.tip} (no games match right now)` : ev.tip;
+  for (const [boxId, defs, picked] of [["eventChips", EVENTS, state.events], ["niceChips", NICE, state.nice]]) {
+    for (const chip of document.querySelectorAll(`#${boxId} .evchip`)) {
+      const ev = defs.find((e) => e.key === chip.dataset.ev);
+      const n = pool.filter((g) => matchesEvent(g, ev)).length;
+      const on = picked.has(ev.key);
+      chip.querySelector(".n").textContent = String(n);
+      chip.setAttribute("aria-pressed", String(on));
+      chip.disabled = n === 0 && !on; // never strand someone in a dead end, but let them undo a pick
+      chip.title = chip.disabled ? `${ev.tip} (no games match right now)` : ev.tip;
+    }
   }
-  $("clearEvents").hidden = state.events.size === 0;
+  $("clearEvents").hidden = chipSelection().size === 0;
+}
+
+// Everything that differs between the two views, kept in step with state.mode.
+function syncMode() {
+  const nice = state.mode === "nice";
+  document.documentElement.dataset.mode = state.mode;
+  $("mode").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === state.mode)));
+  $("modeNote").textContent = MODE_NOTES[state.mode];
+  $("eventChips").hidden = nice;
+  $("niceChips").hidden = !nice;
+  const head = document.querySelector('#head button[data-sort="score"]');
+  if (head) head.textContent = nice ? "Pleasant" : "Score";
 }
 
 function toggleFav(team, gameId) {
@@ -360,6 +421,7 @@ function toggleFav(team, gameId) {
 }
 
 function render() {
+  syncMode();
   const rows = sorted(visible());
   const list = $("list");
   list.replaceChildren();
@@ -388,7 +450,7 @@ function render() {
 }
 
 // ---- shareable URLs -----------------------------------------------------
-// Filters live in the query string (?week=next&league=NFL&sort=wind...) so a link keeps them.
+// Filters live in the query string (?mode=nice&week=next&league=NFL&sort=wind...) so a link keeps them.
 // Favorites stay private to this browser and are not part of the link.
 
 function readUrl() {
@@ -404,7 +466,10 @@ function readUrl() {
   if (u.get("q")) state.q = u.get("q").slice(0, 80);
   if (u.get("day")) state.day = u.get("day"); // checked against the real days in populateDays
   if (u.get("indoor") === "1") state.showAll = true;
+  const mode = pick("mode", ["wild", "nice"]);
+  if (mode) state.mode = mode;
   state.events = new Set((u.get("event") || "").split(",").filter((k) => EVENTS.some((e) => e.key === k)));
+  state.nice = new Set((u.get("nice") || "").split(",").filter((k) => NICE.some((e) => e.key === k)));
   return Boolean(week);
 }
 
@@ -416,7 +481,9 @@ function writeUrl() {
   if (state.q.trim()) u.set("q", state.q.trim());
   if (state.sort !== "score" || state.dir !== "desc") { u.set("sort", state.sort); u.set("dir", state.dir); }
   if (state.showAll) u.set("indoor", "1");
+  if (state.mode === "nice") u.set("mode", "nice");
   if (state.events.size) u.set("event", EVENTS.filter((e) => state.events.has(e.key)).map((e) => e.key).join(","));
+  if (state.nice.size) u.set("nice", NICE.filter((e) => state.nice.has(e.key)).map((e) => e.key).join(","));
   const qs = u.toString().replace(/%2C/g, ",");
   try { window.history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "")); } catch (_) { /* e.g. sandboxed preview */ }
 }
@@ -461,6 +528,12 @@ function setupControls() {
   });
   syncLeague();
 
+  $("mode").addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    state.mode = b.dataset.v; store("mode", state.mode); render();
+  });
+
   const weekSeg = $("week");
   const syncWeek = () => weekSeg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === state.week)));
   weekSeg.addEventListener("click", (e) => {
@@ -504,6 +577,8 @@ async function main() {
   if (LEAGUES.includes(saved)) state.league = saved;
   state.showAll = store("showAll") === true;
   state.mine = store("mine") === true;
+  const savedMode = store("mode");
+  if (savedMode === "wild" || savedMode === "nice") state.mode = savedMode;
   const savedFavs = store("favs");
   if (Array.isArray(savedFavs)) state.favs = new Set(savedFavs.filter((t) => typeof t === "string"));
   const weekFromUrl = readUrl(); // links override remembered preferences

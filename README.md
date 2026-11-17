@@ -20,6 +20,7 @@ Pure Python standard library, no API keys. Network access needed to `site.api.es
 python3 -m weather_watch                 # this week's outdoor NFL, FBS and FCS games
 python3 -m weather_watch --week next     # next week's (late-week games may have no forecast yet)
 python3 -m weather_watch --top 10        # just the 10 nastiest
+python3 -m weather_watch --nicest        # rank by pleasantness (best first) instead of wildness
 python3 -m weather_watch --league fcs    # nfl | cfb (FBS) | fcs | all
 python3 -m weather_watch --include-indoor --tz America/Chicago
 python3 -m weather_watch --json          # machine-readable, includes score breakdown
@@ -60,6 +61,11 @@ This week / Next week switch.
   and adds the new scores to every game's history (kept 8 days). The page shows a ▲/▼ chip
   for games whose score moved 5+ points since about a day ago, and a small history line in
   the game's details. It appears once the site has several hours of history.
+- **Wildest / Nicest weather:** a switch at the top changes the whole ranking. *Nicest* uses
+  the pleasantness score below, its own set of filter chips (Great, Mild, Sunny, Calm, Dry),
+  and green-to-red bands. Dome games have no pleasantness score; "Include dome games" lists
+  them at the bottom, unscored. The choice goes in the link (`?mode=nice&nice=mild,calm`) and
+  is remembered in your browser.
 - **Weather filters:** chips for Wind, Cold, Heat, Rain, Snow, Storms and Precip likely
   show games forecast to have, at some point during the game: sustained wind over 10 mph,
   feels-like 32° or colder, feels-like 90° or hotter, 0.05″+ rain, 0.1″+ snow, thunderstorms,
@@ -107,6 +113,28 @@ Service criteria (which vary by region), not measurements: there is no ground tr
 and the tests pin them down. Cold is scored on the feels-like temperature, which already
 includes wind chill, and wind is scored too, so wind in the cold counts twice on purpose:
 it hurts the crowd and the passing game in different ways.
+
+## Pleasantness
+
+A second score, 0 to 100, for how nice it is to sit in the stands for three hours. It is
+**not** the extremeness score turned upside down: most games are completely calm by that
+measure (it floors at 0), so flipping it would tie dozens of games. Pleasantness has its
+own factors and ramps. It starts at 100 and subtracts points:
+
+| Factor | What it uses | Points lost |
+|---|---|---|
+| Temperature | the feels-like temperature, hour by hour, so a swing counts | 0 from 60 to 72°F; 10 at 50°F, 25 at 40°F, 40 at 32°F, 65 at 20°F; 17 at 82°F, 42 at 90°F, 80 at 100°F |
+| Wind | sustained wind and gusts (larger plus a quarter of the smaller) | 0 up to 6 mph; 8 at 10, 22 at 15, 40 at 20, 70 at 30 mph |
+| Precipitation | chance and amount (larger plus a quarter of the smaller); thunderstorms +25 | chance: 6 at 30%, 14 at 50%, 24 at 70%, 35 at 100%; rain 12 at 0.1″, 30 at 0.3″, 55 at 0.8″ |
+| Clouds | average cloud cover, **only while the sun is up** | 0 under 30%, up to 12 when overcast |
+
+Heat costs more than the same distance of cold, because you can add layers but not take
+them off. The sun position is calculated (`weather_watch/solar.py`, NOAA's formulas; checked
+against the astral library at 8 places on 5 dates, worst difference 2.5 minutes), so a night
+game's clouds cost nothing. Bands: 95+ great, 80-94 nice, 60-79 meh, under 60 rough. Like the
+other score, the reference points are judgment calls, are in `weather_watch/pleasantness.py`
+in one place, and the tests pin them down. Changing them doesn't need a `SCORE_VERSION` bump,
+because no pleasantness history is kept.
 
 The site keeps each game's score history, so changing the formula means bumping
 `SCORE_VERSION`: the history from the old formula is then discarded instead of showing
