@@ -59,6 +59,7 @@ class GameWeather:
     weather_code: int
     precip_chance: float | None = None  # highest chance of precipitation (%) during the game
     hours: list = field(default_factory=list)  # one dict per hour of the game window (see summarize_window)
+    cloud_cover: float | None = None  # average cloud cover (%) during the game; None if not forecast
 
     @property
     def conditions(self) -> str:
@@ -174,6 +175,7 @@ def summarize_window(forecast: dict, kickoff: datetime, hours: int = GAME_HOURS)
         }
         for i in idx
     ]
+    clouds = [at("cloud_cover", i) for i in idx if at("cloud_cover", i) is not None]
     codes = col("weather_code")
     chances = [
         h["precip_probability"][i]
@@ -191,4 +193,5 @@ def summarize_window(forecast: dict, kickoff: datetime, hours: int = GAME_HOURS)
         weather_code=int(max(codes)),  # WMO codes rise roughly with severity
         precip_chance=max(chances) if chances else None,
         hours=per_hour,
+        cloud_cover=sum(clouds) / len(clouds) if clouds else None,
     )

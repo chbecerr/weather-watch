@@ -10,7 +10,9 @@ from weather_watch.site import UnhealthyData, build_payload
 from weather_watch import weather as weather_mod
 from weather_watch import nws as nws_mod
 from weather_watch.nws import grid_to_hourly, parse_valid_time
+from weather_watch.pleasantness import band, pleasantness
 from weather_watch.scoring import SCORE_VERSION, score
+from weather_watch.solar import daylight_fraction, solar_elevation, sun_is_up
 from weather_watch.weather import GameWeather, summarize_window
 
 
@@ -200,6 +202,167 @@ class LeagueMergeTests(unittest.TestCase):
         rows, _, _, _ = self.report(["fcs"], {"fcs": ["a", "shared"]})
         self.assertEqual(sorted(r["id"] for r in rows), ["fcs:a", "fcs:shared"])
         self.assertTrue(all(r["league"] == "FCS" for r in rows))
+
+
+def wxp(feels=66, wind=4, gust=6, rain=0.0, snow=0.0, chance=None, clouds=10, code=1, hours=None):
+    """A GameWeather for pleasantness tests: steady feels-like temperature unless `hours` is given."""
+    per_hour = [{"feels_f": f} for f in (hours if hours is not None else [feels] * 4)]
+    return GameWeather(temp_f=feels, feels_min_f=min(h["feels_f"] for h in per_hour) if per_hour else feels,
+                       feels_max_f=max(h["feels_f"] for h in per_hour) if per_hour else feels,
+                       wind_mph=wind, gust_mph=gust, rain_in=rain, snow_in=snow, weather_code=code,
+                       precip_chance=chance, cloud_cover=clouds, hours=per_hour)
+
+
+class PleasantnessTests(unittest.TestCase):
+    def total(self, daylight=1.0, **kw):
+        return pleasantness(wxp(**kw), daylight).total
+
+    def test_the_ideal_range_is_perfect(self):
+        for feels in (60, 63, 66, 72):
+            self.assertEqual(self.total(feels=feels), 100.0, feels)
+
+    def test_temperature_reference_points(self):
+        for feels, expected in ((50, 90), (40, 75), (32, 60), (20, 35), (82, 82.8), (90, 58), (100, 20)):
+            with self.subTest(feels=feels):
+                self.assertAlmostEqual(self.total(feels=feels), expected, places=1)
+
+    def test_heat_costs_more_than_the_same_distance_of_cold(self):
+        # People can add layers for cold but can't take them off in the heat.
+        self.assertLess(self.total(feels=72 + 10), self.total(feels=60 - 10))
+
+    def test_clouds_cost_a_little_and_only_in_daylight(self):
+        self.assertEqual(self.total(clouds=100, daylight=1.0), 88.0)
+        self.assertEqual(self.total(clouds=100, daylight=0.0), 100.0)  # a night game: nobody can see the clouds
+        self.assertEqual(self.total(clouds=100, daylight=0.5), 94.0)
+        self.assertEqual(self.total(clouds=None), 100.0)  # unknown cloud cover isn't held against a game
+
+    def test_a_temperature_swing_costs_more_than_its_average_suggests(self):
+        swing = pleasantness(wxp(hours=[70, 70, 45, 45])).parts["temp"]
+        steady_at_the_average = pleasantness(wxp(feels=57.5)).parts["temp"]
+        self.assertEqual(swing, 8.8)  # mean of the hourly penalties (0, 0, 17.5, 17.5)
+        self.assertGreater(swing, steady_at_the_average)
+
+    def test_without_hourly_values_it_uses_the_midpoint_of_the_feels_like_range(self):
+        w = wxp(feels=66)
+        w.hours, w.feels_min_f, w.feels_max_f = [], 40, 60  # midpoint 50
+        self.assertEqual(pleasantness(w).total, 90.0)
+
+    def test_wind_costs_from_light_air_up_and_gusts_add_a_quarter(self):
+        self.assertEqual(self.total(wind=6, gust=10), 100.0)
+        self.assertEqual(pleasantness(wxp(wind=15, gust=25)).parts["wind"], 24.5)  # 22 + 0.25 * 10
+        self.assertEqual(pleasantness(wxp(wind=0, gust=35)).parts["wind"], 30.0)  # gusts alone count in full
+
+    def test_precipitation_uses_chance_and_amount_and_storms_cost_extra(self):
+        self.assertEqual(pleasantness(wxp(chance=5)).parts["precip"], 0.0)
+        self.assertEqual(pleasantness(wxp(rain=0.3)).parts["precip"], 30.0)  # no chance given: amount only
+        self.assertEqual(pleasantness(wxp(rain=0.3, chance=60)).parts["precip"], 34.8)  # chance 19 (ramp), amount 30: 30 + 0.25 * 19
+        self.assertEqual(pleasantness(wxp(code=95)).parts["precip"], 25.0)
+
+    def test_every_factor_only_ever_lowers_the_score_as_conditions_worsen(self):
+        series = {
+            "colder": [dict(feels=f) for f in (60, 55, 45, 35, 20, 5)],
+            "hotter": [dict(feels=f) for f in (72, 78, 84, 90, 96, 104)],
+            "windier": [dict(wind=m, gust=m) for m in (4, 8, 12, 18, 25, 35)],
+            "wetter": [dict(rain=r) for r in (0, 0.03, 0.1, 0.3, 0.8, 1.5)],
+            "snowier": [dict(snow=s) for s in (0, 0.1, 0.5, 1, 3, 6)],
+            "likelier": [dict(chance=c) for c in (0, 15, 30, 50, 70, 100)],
+        }
+        for name, steps in series.items():
+            scores = [self.total(**kw) for kw in steps]
+            with self.subTest(name=name):
+                self.assertEqual(scores, sorted(scores, reverse=True), scores)
+                self.assertLess(scores[-1], scores[0])
+
+    def test_the_score_stays_between_0_and_100(self):
+        blizzard = self.total(feels=5, wind=25, gust=40, snow=4, chance=100, clouds=100)
+        self.assertEqual(blizzard, 0.0)
+        self.assertEqual(self.total(clouds=0, feels=66), 100.0)
+
+    def test_bands(self):
+        for value, name in ((100, "great"), (85, "great"), (84.9, "nice"), (70, "nice"), (69.9, "meh"), (50, "meh"), (49.9, "rough"), (0, "rough")):
+            self.assertEqual(band(value), name, value)
+
+
+class SolarTests(unittest.TestCase):
+    NYC = (40.7128, -74.0060)
+    EST = timezone(timedelta(hours=-5))
+
+    def at(self, hour, minute=0, day=(2026, 11, 20)):
+        return datetime(*day, hour, minute, tzinfo=self.EST)
+
+    def test_sunset_falls_where_an_independent_almanac_puts_it(self):
+        # Checked against the astral library for this date and place: sunset 4:33 PM EST.
+        self.assertTrue(sun_is_up(*self.NYC, self.at(16, 20)))
+        self.assertFalse(sun_is_up(*self.NYC, self.at(16, 50)))
+        self.assertFalse(sun_is_up(*self.NYC, self.at(6, 10)))   # sunrise is about 6:50 AM
+        self.assertTrue(sun_is_up(*self.NYC, self.at(7, 30)))
+
+    def test_noon_elevation_is_90_minus_latitude_plus_the_suns_declination(self):
+        self.assertAlmostEqual(solar_elevation(*self.NYC, self.at(11, 45)), 90 - 40.71 - 19.4, delta=1.5)
+
+    def test_equator_at_the_equinox(self):
+        noon = datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc)
+        # 7 minutes before solar noon on the equator: about 90 - 1.8 = 88 degrees, so "nearly overhead".
+        self.assertGreater(solar_elevation(0, 0, noon), 87)
+        self.assertLess(solar_elevation(0, 0, noon), 90)
+        self.assertLess(solar_elevation(0, 0, noon - timedelta(hours=12)), -80)
+
+    def test_daylight_fraction_of_a_game_window(self):
+        def hours(start):
+            return [start.astimezone(timezone.utc) + timedelta(hours=i) for i in range(4)]
+        self.assertEqual(daylight_fraction(*self.NYC, hours(self.at(11))), 1.0)  # 11 AM-3 PM
+        self.assertEqual(daylight_fraction(*self.NYC, hours(self.at(19))), 0.0)  # 7-11 PM
+        straddling = daylight_fraction(*self.NYC, hours(self.at(15)))            # 3-7 PM: sun sets at 4:33
+        self.assertTrue(0.3 < straddling < 0.45, straddling)
+        self.assertEqual(daylight_fraction(*self.NYC, []), 0.0)
+
+
+class PleasantRowTests(unittest.TestCase):
+    def report(self, indoor):
+        event = ev("g", "pre", "2026-11-22T18:00Z")
+        event["competitions"][0]["venue"]["indoor"] = indoor
+        game = parse_events("nfl", {"events": [event]})
+        hourly = {"time": [f"2026-11-22T{h}:00" for h in (18, 19, 20, 21)], "temperature_2m": [60] * 4,
+                  "apparent_temperature": [60] * 4, "rain": [0] * 4, "showers": [0] * 4, "snowfall": [0] * 4,
+                  "wind_speed_10m": [3] * 4, "wind_gusts_10m": [5] * 4, "weather_code": [1] * 4,
+                  "cloud_cover": [100, 100, 100, 100]}
+        wg = games_mod.WeekGames("Week 1", game, None, None)
+        with mock.patch.object(games_mod, "fetch_weeks", return_value=games_mod.LeagueWeeks(wg, games_mod.WeekGames("Week 2", [], None, None))), \
+             mock.patch.object(weather_mod, "geocode_many", side_effect=lambda places: {p: (40.7, -74.0) for p in places}), \
+             mock.patch.object(nws_mod, "fetch_forecasts", return_value={(40.7, -74.0): {"hourly": hourly, "timezone": "America/New_York"}}):
+            return cli_mod.build_report(["nfl"], ("this",)).rows[0]
+
+    def test_outdoor_games_carry_pleasantness_and_daylight(self):
+        row = self.report(indoor=False)
+        self.assertEqual(set(row["pleasant_parts"]), {"temp", "wind", "precip", "clouds"})
+        self.assertTrue(0 <= row["pleasant"] <= 100)
+        self.assertEqual(row["weather"]["cloud_cover"], 100)
+        # 18:00Z-22:00Z on Nov 22 is 1-5 PM in New York: mostly daylight, so the overcast sky costs points.
+        self.assertGreater(row["daylight"], 0.6)
+        self.assertGreater(row["pleasant_parts"]["clouds"], 0)
+
+    def test_dome_games_have_no_pleasantness(self):
+        row = self.report(indoor=True)
+        self.assertTrue(row["indoor"])
+        self.assertEqual((row["pleasant"], row["pleasant_parts"], row["daylight"]), (None, {}, None))
+
+
+class CloudCoverTests(unittest.TestCase):
+    def test_cloud_cover_is_averaged_over_the_game_and_carried_by_the_grid_conversion(self):
+        grid = {
+            "temperature": {"uom": "wmoUnit:degC", "values": [{"validTime": "2026-11-22T16:00:00+00:00/PT6H", "value": 10}]},
+            "skyCover": {"uom": "wmoUnit:percent", "values": [
+                {"validTime": "2026-11-22T16:00:00+00:00/PT2H", "value": 20},
+                {"validTime": "2026-11-22T18:00:00+00:00/PT3H", "value": 80}]},
+        }
+        fc = grid_to_hourly(grid)
+        w = summarize_window(fc, datetime(2026, 11, 22, 17, 0, tzinfo=timezone.utc))  # hours 17, 18, 19, 20
+        self.assertEqual(w.cloud_cover, (20 + 80 + 80 + 80) / 4)
+        # An hour with no sky value is left out of the average rather than counted as clear.
+        grid["skyCover"]["values"][1]["validTime"] = "2026-11-22T18:00:00+00:00/PT2H"  # now nothing for hour 20
+        w = summarize_window(grid_to_hourly(grid), datetime(2026, 11, 22, 17, 0, tzinfo=timezone.utc))
+        self.assertEqual(w.cloud_cover, (20 + 80 + 80) / 3)
+        self.assertIsNone(summarize_window(grid_to_hourly({"temperature": grid["temperature"]}), datetime(2026, 11, 22, 17, tzinfo=timezone.utc)).cloud_cover)
 
 
 class PostseasonTests(unittest.TestCase):

@@ -13,7 +13,9 @@ from . import games as games_mod
 from . import nws
 from . import weather as wx
 from .http import NetworkError
+from .pleasantness import band, pleasantness
 from .scoring import score
+from .solar import daylight_fraction
 from .history import load_previous
 from .site import SOON_DAYS, UnhealthyData, build_payload, write_payload
 
@@ -87,6 +89,9 @@ def build_report(leagues: list[str], weeks: tuple[str, ...] = ("this", "next")) 
             "score": 0.0,
             "factors": {},
             "tags": [],
+            "pleasant": None,  # 0-100, only for outdoor games with a forecast
+            "pleasant_parts": {},
+            "daylight": None,  # share of the game with the sun up
             "weather": None,
             "note": "",
         }
@@ -103,6 +108,10 @@ def build_report(leagues: list[str], weeks: tuple[str, ...] = ("this", "next")) 
                 continue
             s_ = score(w)
             row.update(score=s_.total, factors=s_.parts, tags=s_.tags, venue_tz=fc.get("timezone"))
+            hour_starts = [datetime.fromisoformat(h["t"].replace("Z", "+00:00")) for h in w.hours]
+            daylight = daylight_fraction(c[0], c[1], hour_starts)
+            nice = pleasantness(w, daylight)
+            row.update(pleasant=nice.total, pleasant_parts=nice.parts, daylight=round(daylight, 2))
             row["weather"] = {
                 "temp_f": round(w.temp_f),
                 "feels_like_min_f": round(w.feels_min_f),
@@ -112,6 +121,7 @@ def build_report(leagues: list[str], weeks: tuple[str, ...] = ("this", "next")) 
                 "rain_in": round(w.rain_in, 2),
                 "snow_in": round(w.snow_in, 1),
                 "precip_chance": None if w.precip_chance is None else round(w.precip_chance),
+                "cloud_cover": None if w.cloud_cover is None else round(w.cloud_cover),
                 "hourly": w.hours,
                 "conditions": w.conditions,
             }
@@ -128,20 +138,22 @@ def _fmt_kickoff(iso: str, tz: ZoneInfo, tba: bool) -> str:
     return dt.strftime("%a %m/%d") + ("   TBA" if tba else dt.strftime(" %I:%M%p").lower().replace(" 0", "  "))
 
 
-def print_table(rows: list[dict], tz: ZoneInfo, week_info: dict, hidden: int = 0) -> None:
+def print_table(rows: list[dict], tz: ZoneInfo, week_info: dict, hidden: int = 0, nicest: bool = False) -> None:
     if not rows:
         print("No games with a forecast yet.")
         if hidden:
             print(f"({hidden} game{'s' if hidden != 1 else ''} not shown: no forecast yet)")
         return
     header = (
-        f"{'#':>3}  {'Score':>5}  {'Lg':<3}  {'Game':<11}  {'Kickoff':<16}  "
+        f"{'#':>3}  {'Nice' if nicest else 'Score':>5}  {'Lg':<3}  {'Game':<11}  {'Kickoff':<16}  "
         f"{'Temp':>4} {'Feel':>4}  {'Wind':>7}  {'Precip':<11}  {'Flags':<16}  Venue"
     )
     print(header)
     print("-" * len(header))
     for i, r in enumerate(rows, 1):
         w = r["weather"]
+        value = r["pleasant"] if nicest else r["score"]
+        flags = band(r["pleasant"]).upper() if nicest and r["pleasant"] is not None else " ".join(r["tags"])
         if w:
             if w["snow_in"] >= 0.1:
                 precip = f"{w['snow_in']}\" snow"
@@ -151,11 +163,11 @@ def print_table(rows: list[dict], tz: ZoneInfo, week_info: dict, hidden: int = 0
                 precip = "-"
             wx_cols = (
                 f"{w['temp_f']:>3}° {w['feels_like_min_f']:>3}°  "
-                f"{w['wind_mph']:>2}g{w['gust_mph']:<3}  {precip:<11}  {' '.join(r['tags']):<16}"
+                f"{w['wind_mph']:>2}g{w['gust_mph']:<3}  {precip:<11}  {flags:<16}"
             )
         else:
             wx_cols = f"({r['note']})".ljust(4 + 1 + 4 + 2 + 7 + 2 + 11 + 2 + 16)
-        sc = "    -" if r["score"] is None else f"{r['score']:5.1f}"
+        sc = "    -" if value is None or (nicest and r["indoor"]) else f"{value:5.1f}"
         venue = r["venue"]
         if r["location"] not in venue:
             venue = f"{venue}, {r['location']}"
@@ -181,7 +193,11 @@ def main(argv: list[str] | None = None) -> int:
         "--week", choices=["this", "next"], default="this",
         help="football week to show, using ESPN's weeks (default: this)",
     )
-    p.add_argument("--top", type=int, default=0, help="only show the N most extreme games")
+    p.add_argument("--top", type=int, default=0, help="only show the first N games of the ranking")
+    p.add_argument(
+        "--nicest", action="store_true",
+        help="rank by pleasantness (0-100, best first) instead of by how extreme the weather is",
+    )
     p.add_argument("--include-indoor", action="store_true", help="also list dome/indoor games")
     p.add_argument("--tz", default="America/New_York", help="timezone for kickoff times")
     p.add_argument("--json", action="store_true", help="emit JSON instead of a table")
@@ -219,6 +235,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.include_indoor:
         rows = [r for r in rows if not r["indoor"]]
+    if args.nicest:  # dome games have no pleasantness score and go last
+        rows.sort(key=lambda r: (r["pleasant"] is None, -(r["pleasant"] or 0), r["kickoff_utc"]))
     if args.top:
         rows = rows[: args.top]
 
@@ -226,7 +244,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dump(rows, sys.stdout, indent=2)
         print()
     else:
-        print_table(rows, ZoneInfo(args.tz), week_info[args.week], hidden[args.week])
+        print_table(rows, ZoneInfo(args.tz), week_info[args.week], hidden[args.week], nicest=args.nicest)
     return 0
 
 
