@@ -51,7 +51,7 @@ STORM_POINTS = 20.0
 THUNDERSTORM_CODE = 95  # WMO weather code
 
 
-def _ramp(points: Ramp, x: float) -> float:
+def ramp(points: Ramp, x: float) -> float:
     if x <= points[0][0]:
         return 0.0
     for (x0, y0), (x1, y1) in zip(points, points[1:]):
@@ -72,13 +72,13 @@ class Score:
 
 
 def score(w: GameWeather) -> Score:
-    sustained, gust = _ramp(WIND, w.wind_mph), _ramp(GUST, w.gust_mph)
+    sustained, gust = ramp(WIND, w.wind_mph), ramp(GUST, w.gust_mph)
     parts = {
-        "cold": _ramp(COLD, COLD_COMFORT_F - w.feels_min_f),
-        "heat": _ramp(HEAT, w.feels_max_f),
+        "cold": ramp(COLD, COLD_COMFORT_F - w.feels_min_f),
+        "heat": ramp(HEAT, w.feels_max_f),
         "wind": max(sustained, gust) + GUST_SHARE * min(sustained, gust),
-        "rain": _ramp(RAIN, w.rain_in),
-        "snow": _ramp(SNOW, w.snow_in),
+        "rain": ramp(RAIN, w.rain_in),
+        "snow": ramp(SNOW, w.snow_in),
         "storm": STORM_POINTS if w.weather_code >= THUNDERSTORM_CODE else 0.0,
     }
     parts = {k: round(v, 1) for k, v in parts.items()}

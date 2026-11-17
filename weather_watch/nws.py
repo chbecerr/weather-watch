@@ -32,7 +32,7 @@ def parse_valid_time(valid_time: str) -> tuple[datetime, int]:
     return start, max(total, 1)
 
 
-def _convert(value: float, uom: str) -> float:
+def convert_unit(value: float, uom: str) -> float:
     unit = (uom or "").split(":")[-1]
     if unit == "degC":
         return value * 9 / 5 + 32
@@ -58,7 +58,7 @@ def _hourly(prop: dict | None, amount: bool = False) -> dict[str, float]:
         if v.get("value") is None:
             continue
         start, hours = parse_valid_time(v["validTime"])
-        val = _convert(v["value"], uom)
+        val = convert_unit(v["value"], uom)
         if amount:
             val /= hours
         for i in range(hours):

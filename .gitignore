@@ -6,3 +6,5 @@ build/
 dist/
 docs/data.json
 docs/data.json.tmp
+docs/results.json
+docs/results.json.tmp

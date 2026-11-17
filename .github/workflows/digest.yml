@@ -1,0 +1,62 @@
+name: Weekly forecast check
+
+# Once a week this posts a GitHub issue: how last week's forecasts held up against what the weather
+# stations measured, and the week's wildest and nicest games. The issue is assigned to (and mentions)
+# the repository owner, so GitHub emails it; no passwords or secrets are involved. Check that email
+# notifications are on under your GitHub Settings > Notifications.
+#
+# Run it by hand from the Actions tab: by default that is a dry run that only shows the digest in the
+# run's summary. Tick "post" to really create the issue and send the email.
+
+on:
+  schedule:
+    - cron: "13 13 * * 2" # Tuesdays, about 8-9 AM Eastern: Monday night's game and its observations are in
+  workflow_dispatch:
+    inputs:
+      post:
+        description: "Post the issue (and send the email). Leave unticked for a dry run."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Fetch the site's data and forecast archive
+        run: |
+          base="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+          for f in data.json results.json; do
+            code=$(curl -sS -L --retry 3 --retry-delay 2 -o "$f" -w '%{http_code}' "$base/$f?run=${{ github.run_id }}" || echo 000)
+            echo "$f: HTTP $code"
+            [ "$code" = "200" ] || rm -f "$f"   # the digest copes with a missing file
+          done
+          echo "SITE_URL=$base" >> "$GITHUB_ENV"
+
+      - name: Build the digest
+        id: build
+        run: python -m weather_watch.digest --data data.json --results results.json --site-url "$SITE_URL" --out digest.md --github-output "$GITHUB_OUTPUT"
+
+      - name: Show the digest in this run's summary
+        run: cat digest.md >> "$GITHUB_STEP_SUMMARY"
+
+      # Scheduled runs post only when there is something to report; a manual run posts only if "post" is ticked.
+      - name: Post it as an issue
+        if: (github.event_name == 'schedule' && steps.build.outputs.has_results == 'true') || (github.event_name == 'workflow_dispatch' && inputs.post)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE: ${{ steps.build.outputs.title }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          printf '\ncc @%s\n' "$OWNER" >> digest.md   # a mention as well as the assignment, so the email arrives either way
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file digest.md --assignee "$OWNER"

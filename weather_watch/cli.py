@@ -9,6 +9,7 @@ from typing import NamedTuple
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from . import archive, observations
 from . import games as games_mod
 from . import nws
 from . import weather as wx
@@ -17,6 +18,7 @@ from .pleasantness import band, pleasantness
 from .scoring import score
 from .solar import daylight_fraction
 from .history import NOTABLE_MOVE, load_previous, load_seed
+from .weather import load_cache, save_cache
 from .history import merge as merge_history
 from .site import SOON_DAYS, UnhealthyData, build_payload, write_payload
 
@@ -79,6 +81,8 @@ def build_report(leagues: list[str], weeks: tuple[str, ...] = ("this", "next")) 
             "league": g.league.upper(),
             "link": g.link,
             "venue_tz": None,
+            "lat": None,  # the city's coordinates: used to find the nearest weather station afterwards
+            "lon": None,
             "game": g.short_name,
             "matchup": g.name,
             "kickoff_utc": g.kickoff.isoformat(),
@@ -108,7 +112,7 @@ def build_report(leagues: list[str], weeks: tuple[str, ...] = ("this", "next")) 
                     hidden_soon[key] += 1
                 continue
             s_ = score(w)
-            row.update(score=s_.total, factors=s_.parts, tags=s_.tags, venue_tz=fc.get("timezone"))
+            row.update(score=s_.total, factors=s_.parts, tags=s_.tags, venue_tz=fc.get("timezone"), lat=round(c[0], 4), lon=round(c[1], 4))
             hour_starts = [datetime.fromisoformat(h["t"].replace("Z", "+00:00")) for h in w.hours]
             daylight = daylight_fraction(c[0], c[1], hour_starts)
             nice = pleasantness(w, daylight)
@@ -132,6 +136,29 @@ def build_report(leagues: list[str], weeks: tuple[str, ...] = ("this", "next")) 
 
     rows.sort(key=lambda r: (-(r["score"] or 0), r["kickoff_utc"]))
     return Report(rows, week_info, hidden, hidden_soon)
+
+
+def update_archive(rows: list[dict], previous_path: str | None, out_path: str) -> None:
+    """Add this run to the forecast archive and write it. Never raises: the archive is the one thing
+    that can't be rebuilt (the Weather Service keeps observations for only a week), so a problem
+    in here must not lose it or block the site."""
+    now = datetime.now(timezone.utc)
+    games = archive.load(previous_path)
+    stations = load_cache(observations.STATIONS_CACHE)
+    note = ""
+    try:
+        recorded = archive.record_forecasts(games, rows, now)
+        found, gave_up = archive.observe_finished(
+            games, now, lambda lat, lon, start: observations.fetch_observed(lat, lon, start, cache=stations)
+        )
+        removed = archive.prune(games, now)
+        note = f"{recorded} upcoming games recorded, {found} finished games now have observations, {gave_up} given up on, {removed} pruned"
+    except Exception as err:  # noqa: BLE001 - see the docstring
+        note = f"warning: stopped early ({type(err).__name__}: {err})"
+    save_cache(stations, observations.STATIONS_CACHE)
+    write_payload(archive.to_payload(games, now), out_path, compact=True)
+    with_obs = sum(1 for r in games.values() if r.get("observed"))
+    print(f"forecast archive: {note}; {len(games)} games stored, {with_obs} with observations", file=sys.stderr)
 
 
 def rank_nicest(rows: list[dict]) -> list[dict]:
@@ -210,6 +237,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--json", action="store_true", help="emit JSON instead of a table")
     p.add_argument("--site-data", metavar="PATH", help="write the website's data file (all games) to PATH")
     p.add_argument(
+        "--previous-results", metavar="PATH",
+        help="with --site-data: the previously published results.json (the forecast archive) to add to",
+    )
+    p.add_argument(
+        "--results-out", metavar="PATH",
+        help="with --site-data: write the updated forecast archive here (published as results.json)",
+    )
+    p.add_argument(
         "--seed", metavar="PATH",
         help="with --site-data: extra earlier scores to start the history from (data/history-seed.json)",
     )
@@ -245,6 +280,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: not writing {args.site_data}: {err}", file=sys.stderr)
             return 1
         write_payload(payload, args.site_data)
+        if args.results_out:
+            update_archive(rows, args.previous_results, args.results_out)
         trends = [g["trend"] for g in payload["games"] if g.get("trend")]
         notable = sum(1 for t in trends if abs(t["delta"]) >= NOTABLE_MOVE)
         print(

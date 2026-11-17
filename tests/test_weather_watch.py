@@ -1,8 +1,15 @@
+import contextlib
+import io
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
+from weather_watch import archive as archive_mod
 from weather_watch import cli as cli_mod
+from weather_watch import digest as digest_mod
+from weather_watch import observations as obs_mod
+from weather_watch import scorecard as sc_mod
+from weather_watch import site as site_mod
 from weather_watch import games as games_mod
 from weather_watch.games import parse_events
 from weather_watch import history
@@ -364,6 +371,7 @@ class PleasantRowTests(unittest.TestCase):
         self.assertEqual(set(row["pleasant_parts"]), {"temp", "wind", "precip", "clouds"})
         self.assertTrue(0 <= row["pleasant"] <= 100)
         self.assertEqual(row["weather"]["cloud_cover"], 100)
+        self.assertEqual((row["lat"], row["lon"]), (40.7, -74.0))   # kept so the nearest weather station can be found afterwards
         # 18:00Z-22:00Z on Nov 22 is 1-5 PM in New York: mostly daylight, so the overcast sky costs points.
         self.assertGreater(row["daylight"], 0.6)
         self.assertGreater(row["pleasant_parts"]["clouds"], 0)
@@ -372,6 +380,7 @@ class PleasantRowTests(unittest.TestCase):
         row = self.report(indoor=True)
         self.assertTrue(row["indoor"])
         self.assertEqual((row["pleasant"], row["pleasant_parts"], row["daylight"]), (None, {}, None))
+        self.assertEqual((row["lat"], row["lon"]), (None, None))
 
 
 class CloudCoverTests(unittest.TestCase):
@@ -390,6 +399,436 @@ class CloudCoverTests(unittest.TestCase):
         w = summarize_window(grid_to_hourly(grid), datetime(2026, 11, 22, 17, 0, tzinfo=timezone.utc))
         self.assertEqual(w.cloud_cover, (20 + 80 + 80) / 3)
         self.assertIsNone(summarize_window(grid_to_hourly({"temperature": grid["temperature"]}), datetime(2026, 11, 22, 17, tzinfo=timezone.utc)).cloud_cover)
+
+
+def obs(ts, temp_c=3.0, wind_kmh=0.0, gust_kmh=None, chill_c=None, heat_c=None, text="", present=None, clouds=None):
+    """A reading shaped like the Weather Service's observation API (values wrapped with a unit code)."""
+    def field(value, unit):
+        return {"unitCode": unit, "value": value, "qualityControl": "V"}
+    return {"properties": {
+        "timestamp": ts,
+        "textDescription": text,
+        "temperature": field(temp_c, "wmoUnit:degC"),
+        "windSpeed": field(wind_kmh, "wmoUnit:km_h-1"),
+        "windGust": field(gust_kmh, "wmoUnit:km_h-1"),
+        "windChill": field(chill_c, "wmoUnit:degC"),
+        "heatIndex": field(heat_c, "wmoUnit:degC"),
+        "precipitationLastHour": field(None, "wmoUnit:mm"),
+        "presentWeather": [{"intensity": None, "modifier": None, "weather": w, "rawString": ""} for w in (present or [])],
+        "cloudLayers": [{"base": {"unitCode": "wmoUnit:m", "value": 880}, "amount": a} for a in (clouds or [])],
+    }}
+
+
+START = datetime(2026, 11, 16, 1, 0, tzinfo=timezone.utc)
+
+
+def hour_of_readings(hour, n=3, **kw):
+    """n readings spread across the given hour (UTC), all with the same values."""
+    return [obs(f"2026-11-16T{hour:02d}:{m:02d}:00+00:00", **kw) for m in (0, 10, 25, 40, 55)[:n]]
+
+
+class ObservationTests(unittest.TestCase):
+    def test_readings_are_converted_and_averaged_per_hour_before_taking_extremes(self):
+        feats = (hour_of_readings(1, 2, temp_c=3, wind_kmh=10) + hour_of_readings(1, 1, temp_c=5, wind_kmh=20)   # hour 1: 3.67C, 13.3 km/h mean
+                 + hour_of_readings(2, 3, temp_c=1, wind_kmh=30))                                             # hour 2: 1C, 30 km/h
+        s = obs_mod.summarize(feats, START, hours=2)
+        self.assertEqual(s["temp_f"], 39)        # first hour, 3.67C = 38.6F
+        self.assertEqual(s["feels_min_f"], 34)   # second hour, 1C = 33.8F
+        self.assertEqual(s["feels_max_f"], 39)
+        self.assertEqual(s["wind_mph"], 19)      # hour 2's mean, 30 km/h = 18.6 mph
+
+    def test_one_gusty_reading_does_not_set_the_sustained_wind(self):
+        feats = hour_of_readings(1, 4, temp_c=3, wind_kmh=10) + [obs("2026-11-16T01:58:00+00:00", temp_c=3, wind_kmh=60)]
+        self.assertEqual(obs_mod.summarize(feats, START, hours=1)["wind_mph"], 12)  # mean 20 km/h = 12.4 mph, not the 60 km/h (37 mph) peak
+
+    def test_feels_like_prefers_wind_chill_then_heat_index_then_the_temperature(self):
+        chill = obs_mod.summarize(hour_of_readings(1, 3, temp_c=0, wind_kmh=20, chill_c=-5), START, hours=1)
+        heat = obs_mod.summarize(hour_of_readings(1, 3, temp_c=35, wind_kmh=5, heat_c=41), START, hours=1)
+        plain = obs_mod.summarize(hour_of_readings(1, 3, temp_c=10, wind_kmh=5), START, hours=1)
+        self.assertEqual((chill["temp_f"], chill["feels_min_f"]), (32, 23))
+        self.assertEqual((heat["temp_f"], heat["feels_max_f"]), (95, 106))
+        self.assertEqual((plain["temp_f"], plain["feels_min_f"], plain["feels_max_f"]), (50, 50, 50))
+
+    def test_only_readings_inside_the_window_count(self):
+        feats = hour_of_readings(0, 3, temp_c=-20, wind_kmh=80) + hour_of_readings(1, 3, temp_c=3, wind_kmh=5) + hour_of_readings(5, 3, temp_c=40, wind_kmh=90)
+        s = obs_mod.summarize(feats, START, hours=4)   # 01:00-05:00: the 00:xx and 05:xx readings are outside
+        self.assertEqual((s["temp_f"], s["wind_mph"], s["readings"]), (37, 3, 3))
+
+    def test_gusts_are_none_unless_reported_and_then_the_highest(self):
+        feats = hour_of_readings(1, 3, temp_c=3, wind_kmh=10)
+        self.assertIsNone(obs_mod.summarize(feats, START, hours=1)["gust_mph"])
+        feats.append(obs("2026-11-16T01:30:00+00:00", temp_c=3, wind_kmh=10, gust_kmh=48.28))
+        self.assertEqual(obs_mod.summarize(feats, START, hours=1)["gust_mph"], 30)
+
+    def test_readings_with_no_sky_information_are_not_counted_as_clear(self):
+        feats = hour_of_readings(1, 2, temp_c=3, wind_kmh=5, clouds=["OVC"]) + hour_of_readings(1, 3, temp_c=3, wind_kmh=5)
+        self.assertEqual(obs_mod.summarize(feats, START, hours=1)["cloud_cover"], 100)  # not diluted by the three empty ones
+        none_at_all = obs_mod.summarize(hour_of_readings(1, 4, temp_c=3, wind_kmh=5), START, hours=1)
+        self.assertIsNone(none_at_all["cloud_cover"])
+
+    def test_cloud_amounts_become_percent_and_the_thickest_layer_wins(self):
+        feats = [obs("2026-11-16T01:00:00+00:00", clouds=["FEW", "BKN"]), obs("2026-11-16T01:10:00+00:00", clouds=["CLR"]),
+                 obs("2026-11-16T01:20:00+00:00", clouds=["OVC"]), obs("2026-11-16T01:30:00+00:00", clouds=["SCT"])]
+        self.assertEqual(obs_mod.summarize(feats, START, hours=1)["cloud_cover"], round((75 + 0 + 100 + 44) / 4))
+
+    def test_rain_snow_and_thunder_are_read_from_present_weather_or_the_description(self):
+        def flags(**kw):
+            s = obs_mod.summarize(hour_of_readings(1, 3, temp_c=3, wind_kmh=5, **kw), START, hours=1)
+            return (s["rain"], s["snow"], s["storm"])
+        self.assertEqual(flags(), (False, False, False))
+        self.assertEqual(flags(text="Mostly Cloudy"), (False, False, False))
+        self.assertEqual(flags(text="Light Rain"), (True, False, False))
+        self.assertEqual(flags(present=["snow_showers"]), (False, True, False))   # "snow showers" is not rain
+        self.assertEqual(flags(text="Rain Showers"), (True, False, False))
+        self.assertEqual(flags(text="Showers in the Vicinity"), (True, False, False))
+        self.assertEqual(flags(text="Light Drizzle"), (True, False, False))
+        self.assertEqual(flags(present=["ice_pellets"]), (False, True, False))
+        self.assertEqual(flags(text="Thunderstorm", present=["thunderstorms", "rain"]), (True, False, True))
+        self.assertEqual(flags(present=["freezing_rain"]), (True, False, False))
+
+    def test_too_few_usable_readings_means_no_summary(self):
+        self.assertIsNone(obs_mod.summarize(hour_of_readings(1, 2, temp_c=3, wind_kmh=5), START, hours=1))
+        no_wind = [obs(f"2026-11-16T01:{m:02d}:00+00:00", wind_kmh=None) for m in (0, 10, 20, 30, 40)]  # like a station that reports no wind
+        self.assertIsNone(obs_mod.summarize(no_wind, START, hours=1))
+        self.assertIsNone(obs_mod.summarize([], START))
+        self.assertIsNone(obs_mod.summarize([{"properties": {"timestamp": "garbage"}}, {}], START))
+
+    def test_it_skips_a_station_with_no_wind_and_uses_the_next_nearest(self):
+        points = {"properties": {"observationStations": "https://api.weather.gov/gridpoints/X/stations"}}
+        stations = {"features": [{"properties": {"stationIdentifier": i}} for i in ("AAAA", "BBBB", "CCCC", "DDDD", "EEEE")]}
+        good = {"features": hour_of_readings(1, 4, temp_c=3, wind_kmh=5)}
+        bad = {"features": [obs(f"2026-11-16T01:{m:02d}:00+00:00", wind_kmh=None) for m in (0, 10, 20, 30)]}
+        asked = []
+        def fake(url, params=None, **kw):
+            asked.append(url)
+            if "/points/" in url: return points
+            if url.endswith("/stations"): return stations
+            return bad if "AAAA" in url else good
+        cache = {}
+        with mock.patch.object(obs_mod, "get_json", side_effect=fake):
+            result = obs_mod.fetch_observed(40.0, -80.0, START, hours=1, cache=cache)
+        self.assertEqual(result["station"], "BBBB")
+        self.assertEqual(cache["40.0000,-80.0000"][:3], ["AAAA", "BBBB", "CCCC"])
+        calls = []
+        with mock.patch.object(obs_mod, "get_json", side_effect=lambda url, params=None, **kw: calls.append(url) or good):
+            obs_mod.fetch_observed(40.0, -80.0, START, hours=1, cache=cache)
+        self.assertFalse(any("/points/" in u for u in calls))  # the second look-up used the cache
+
+    def test_every_station_failing_or_the_lookup_failing_gives_none_not_an_error(self):
+        points = {"properties": {"observationStations": "https://x/stations"}}
+        stations = {"features": [{"properties": {"stationIdentifier": "AAAA"}}]}
+        def failing_obs(url, params=None, **kw):
+            if "/points/" in url: return points
+            if url.endswith("/stations"): return stations
+            raise OSError("down")
+        with mock.patch.object(obs_mod, "get_json", side_effect=failing_obs):
+            self.assertIsNone(obs_mod.fetch_observed(40.0, -80.0, START, cache={}))
+        with mock.patch.object(obs_mod, "get_json", side_effect=OSError("down")):
+            self.assertIsNone(obs_mod.fetch_observed(40.0, -80.0, START, cache={}))
+
+
+NOW = datetime(2026, 11, 17, 12, 0, tzinfo=timezone.utc)
+
+
+def forecast_row(hours_to_kickoff, game_id="cfb:1", game="UNM @ WYO", indoor=False, with_weather=True, wind=18, feels=14, now=NOW, **extra):
+    kickoff = now + timedelta(hours=hours_to_kickoff)
+    row = {
+        "id": game_id, "league": "CFB", "game": game, "matchup": game.replace("@", "at"), "kickoff_utc": kickoff.isoformat(),
+        "venue": "Stadium", "location": "Town, ST", "indoor": indoor, "lat": 41.3, "lon": -105.6, "score": 30.0, "pleasant": 20.0,
+        "weather": {"feels_like_min_f": feels, "feels_like_max_f": feels + 6, "wind_mph": wind, "gust_mph": wind + 8, "rain_in": 0.0,
+                    "snow_in": 0.1, "precip_chance": 37, "cloud_cover": 65} if with_weather else None,
+    }
+    row.update(extra)
+    return row
+
+
+class ArchiveTests(unittest.TestCase):
+    def test_a_forecast_is_kept_at_each_lead_time_and_the_final_one_is_the_last_before_kickoff(self):
+        games = {}
+        archive_mod.record_forecasts(games, [forecast_row(100, wind=10)], NOW)                      # 100 hours out
+        rec = games["cfb:1"]
+        self.assertEqual(set(rec["forecasts"]), {"72h", "24h", "final"})
+        self.assertEqual(rec["forecasts"]["72h"]["wind_mph"], 10)
+        later = NOW + timedelta(hours=30)                                                           # now 70 hours out
+        archive_mod.record_forecasts(games, [forecast_row(70, wind=15, now=later - timedelta(0))], later)
+        f = games["cfb:1"]["forecasts"]
+        self.assertEqual((f["72h"]["wind_mph"], f["24h"]["wind_mph"], f["final"]["wind_mph"]), (10, 15, 15))  # 72h is no longer updated
+        much_later = NOW + timedelta(hours=85)                                                      # now 15 hours out
+        archive_mod.record_forecasts(games, [forecast_row(15, wind=22, now=much_later)], much_later)
+        f = games["cfb:1"]["forecasts"]
+        self.assertEqual((f["72h"]["wind_mph"], f["24h"]["wind_mph"], f["final"]["wind_mph"]), (10, 15, 22))
+        after = NOW + timedelta(hours=101)                                                          # kickoff has passed
+        archive_mod.record_forecasts(games, [forecast_row(-1, wind=99, now=after)], after)
+        self.assertEqual(games["cfb:1"]["forecasts"]["final"]["wind_mph"], 22)                      # unchanged: it's no longer a forecast
+
+    def test_record_carries_what_is_needed_to_check_it_later(self):
+        games = {}
+        archive_mod.record_forecasts(games, [forecast_row(50)], NOW)
+        rec = games["cfb:1"]
+        self.assertEqual((rec["game"], rec["lat"], rec["lon"], rec["observed"]), ("UNM @ WYO", 41.3, -105.6, None))
+        self.assertEqual(rec["forecasts"]["final"]["feels_min_f"], 14)
+        self.assertEqual(rec["forecasts"]["final"]["chance"], 37)
+
+    def test_domes_games_without_a_forecast_or_location_and_started_games_are_not_recorded(self):
+        games = {}
+        n = archive_mod.record_forecasts(games, [
+            forecast_row(50, "a", indoor=True), forecast_row(50, "b", with_weather=False), forecast_row(50, "c", lat=None),
+            forecast_row(-2, "d"), forecast_row(50, "e")], NOW)
+        self.assertEqual((n, list(games)), (1, ["e"]))
+
+    def finished(self, hours_after_kickoff_hour, **kw):
+        kickoff = NOW.replace(minute=30)
+        games = {"cfb:1": {"kickoff_utc": kickoff.isoformat(), "lat": 41.3, "lon": -105.6, "forecasts": {}, "observed": None, "observed_status": None, "attempts": 0}}
+        calls = []
+        def fetch(lat, lon, start):
+            calls.append((lat, lon, start))
+            return kw.get("result")
+        found = archive_mod.observe_finished(games, NOW.replace(minute=0) + timedelta(hours=hours_after_kickoff_hour, minutes=15), fetch)
+        return games["cfb:1"], calls, found
+
+    def test_nothing_is_fetched_until_the_whole_window_has_passed(self):
+        rec, calls, found = self.finished(4)             # 4h15m after the kickoff hour: the window ends at 4h, plus an hour of slack
+        self.assertEqual((calls, found, rec["observed"]), ([], (0, 0), None))
+
+    def test_after_the_game_it_fetches_for_the_four_hours_from_the_kickoff_hour_and_stores_the_result(self):
+        obs_result = {"temp_f": 30, "feels_min_f": 25, "feels_max_f": 31, "wind_mph": 12, "station": "KLAR"}
+        rec, calls, found = self.finished(5, result=obs_result)
+        self.assertEqual(calls, [(41.3, -105.6, NOW.replace(minute=0))])   # the start of the kickoff hour, not 12:30
+        self.assertEqual((rec["observed"], rec["observed_status"], found), (obs_result, "ok", (1, 0)))
+
+    def test_a_failed_fetch_is_retried_then_given_up_on(self):
+        games = {"cfb:1": {"kickoff_utc": (NOW - timedelta(hours=10)).isoformat(), "lat": 1.0, "lon": 2.0, "forecasts": {}, "observed": None, "observed_status": None, "attempts": 0}}
+        for expected_attempts in range(1, archive_mod.MAX_ATTEMPTS + 1):
+            archive_mod.observe_finished(games, NOW, lambda *a: None)
+            self.assertEqual((games["cfb:1"]["attempts"], games["cfb:1"]["observed_status"]), (expected_attempts, None))
+        found = archive_mod.observe_finished(games, NOW, lambda *a: self.fail("should have given up"))
+        self.assertEqual((found, games["cfb:1"]["observed_status"]), ((0, 1), "unavailable"))
+
+    def test_games_older_than_the_observation_window_are_marked_unavailable_without_asking(self):
+        games = {"cfb:1": {"kickoff_utc": (NOW - timedelta(days=8)).isoformat(), "lat": 1.0, "lon": 2.0, "forecasts": {}, "observed": None, "observed_status": None, "attempts": 0}}
+        found = archive_mod.observe_finished(games, NOW, lambda *a: self.fail("observations are gone after about a week"))
+        self.assertEqual((found, games["cfb:1"]["observed_status"]), ((0, 1), "unavailable"))
+
+    def test_already_checked_games_are_left_alone_and_a_run_has_a_cap(self):
+        done = {"kickoff_utc": (NOW - timedelta(hours=10)).isoformat(), "lat": 1, "lon": 2, "observed": {"x": 1}, "observed_status": "ok"}
+        games = {"done": done}
+        archive_mod.observe_finished(games, NOW, lambda *a: self.fail("already observed"))
+        many = {f"g{i}": {"kickoff_utc": (NOW - timedelta(hours=10)).isoformat(), "lat": 1, "lon": 2, "observed": None, "attempts": 0} for i in range(archive_mod.MAX_FETCHES_PER_RUN + 25)}
+        count = []
+        archive_mod.observe_finished(many, NOW, lambda *a: count.append(1) or {"ok": 1})
+        self.assertEqual(len(count), archive_mod.MAX_FETCHES_PER_RUN)
+
+    def test_old_records_are_pruned_and_unreadable_ones_too(self):
+        games = {"new": {"kickoff_utc": (NOW - timedelta(days=3)).isoformat()}, "old": {"kickoff_utc": (NOW - timedelta(days=31)).isoformat()}, "bad": {"kickoff_utc": "nope"}, "empty": {}}
+        self.assertEqual(archive_mod.prune(games, NOW), 3)
+        self.assertEqual(list(games), ["new"])
+
+    def test_load_tolerates_missing_and_damaged_files_and_round_trips(self):
+        import json, os, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "results.json")
+            self.assertEqual(archive_mod.load(path), {})
+            self.assertEqual(archive_mod.load(None), {})
+            for junk in ("{nope", "[]", '{"games": 5}'):
+                with open(path, "w") as fh:
+                    fh.write(junk)
+                self.assertEqual(archive_mod.load(path), {}, junk)
+            site_mod.write_payload(archive_mod.to_payload({"cfb:1": {"game": "A @ B"}}, NOW), path, compact=True)
+            self.assertEqual(archive_mod.load(path), {"cfb:1": {"game": "A @ B"}})
+            with open(path) as fh:
+                text = fh.read()
+            self.assertNotIn("\n ", text)                         # compact: no indentation
+            self.assertEqual(json.loads(text)["version"], archive_mod.VERSION)
+
+
+class UpdateArchiveTests(unittest.TestCase):
+    def run_update(self, previous, rows, fetch):
+        import json, os, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            prev, out = os.path.join(d, "prev.json"), os.path.join(d, "out.json")
+            site_mod.write_payload(archive_mod.to_payload(previous, NOW), prev, compact=True)
+            with mock.patch.object(obs_mod, "fetch_observed", side_effect=fetch), mock.patch.object(cli_mod, "load_cache", return_value={}), \
+                 mock.patch.object(cli_mod, "save_cache"), contextlib.redirect_stderr(io.StringIO()):
+                cli_mod.update_archive(rows, prev, out)
+            with open(out) as fh:
+                return json.load(fh)["games"]
+
+    def test_a_run_adds_forecasts_and_observations_to_the_previous_archive(self):
+        finished = {"kickoff_utc": (datetime.now(timezone.utc) - timedelta(hours=10)).isoformat(), "lat": 1.0, "lon": 2.0, "game": "OLD @ GAME",
+                    "forecasts": {"final": {}}, "observed": None, "observed_status": None, "attempts": 0}
+        soon = forecast_row(30, now=datetime.now(timezone.utc))
+        out = self.run_update({"cfb:old": finished}, [soon], lambda lat, lon, start, cache=None: {"station": "KXXX", "wind_mph": 5})
+        self.assertEqual(out["cfb:old"]["observed"], {"station": "KXXX", "wind_mph": 5})
+        self.assertIn("cfb:1", out)
+        self.assertEqual(set(out["cfb:1"]["forecasts"]), {"24h", "final"})   # 30 hours out: too late for the 72h snapshot
+
+    def test_a_bug_while_updating_never_loses_the_archive_or_raises(self):
+        existing = {"cfb:keep": {"kickoff_utc": (datetime.now(timezone.utc) - timedelta(days=2)).isoformat(), "game": "KEEP @ ME", "forecasts": {}, "observed": {"wind_mph": 3}}}
+        with mock.patch.object(archive_mod, "record_forecasts", side_effect=RuntimeError("boom")):
+            out = self.run_update(existing, [forecast_row(30)], lambda *a, **k: None)
+        self.assertEqual(out["cfb:keep"]["observed"], {"wind_mph": 3})      # still written, with its data
+
+
+class ScorecardTests(unittest.TestCase):
+    def fc(self, feels_min=14, feels_max=20, wind=18, chance=37, rain=0.0, snow=0.1, clouds=65):
+        return {"feels_min_f": feels_min, "feels_max_f": feels_max, "wind_mph": wind, "gust_mph": wind + 8, "rain_in": rain, "snow_in": snow, "chance": chance, "clouds": clouds, "score": 30.0, "pleasant": 20.0}
+
+    def ob(self, feels_min=10, feels_max=16, wind=22, cloud=80, rain=False, snow=False, storm=False):
+        return {"station": "KXXX", "temp_f": feels_max, "feels_min_f": feels_min, "feels_max_f": feels_max, "wind_mph": wind, "gust_mph": None, "cloud_cover": cloud, "rain": rain, "snow": snow, "storm": storm, "readings": 20}
+
+    def record(self, game="UNM @ WYO", kickoff=NOW - timedelta(days=2), forecasts=None, observed="default"):
+        return {"game": game, "matchup": game, "league": "CFB", "kickoff_utc": kickoff.isoformat(),
+                "forecasts": forecasts if forecasts is not None else {"72h": self.fc(), "24h": self.fc(), "final": self.fc()},
+                "observed": self.ob() if observed == "default" else observed}
+
+    def test_partial_score_is_the_cold_heat_and_sustained_wind_parts_of_the_real_score(self):
+        self.assertEqual(sc_mod.partial_score(66, 70, 4), 0.0)
+        self.assertEqual(sc_mod.partial_score(20, 60, 30), 15.0 + 40.0)         # cold 15 at feels 20F, wind 40 at 30 mph
+        self.assertEqual(sc_mod.partial_score(60, 105, 0), 40.0)                # heat 40 at 105F
+
+    def test_errors_are_observed_minus_forecast(self):
+        c = sc_mod.compare(self.record(), "final")
+        self.assertEqual((c["feels_min_error"], c["feels_max_error"], c["wind_error"], c["cloud_error"]), (-4, -4, 4, 15))
+
+    def test_rain_and_snow_calls_are_hits_misses_false_alarms_or_correct_dry(self):
+        def wet(chance, rain, snow, observed_wet):
+            record = self.record(forecasts={"final": self.fc(chance=chance, rain=rain, snow=snow)}, observed=self.ob(rain=observed_wet))
+            return sc_mod.compare(record, "final")["wet"]
+        self.assertEqual(wet(70, 0.1, 0, True), "hit")
+        self.assertEqual(wet(70, 0.1, 0, False), "false alarm")
+        self.assertEqual(wet(10, 0.0, 0, True), "miss")
+        self.assertEqual(wet(10, 0.0, 0, False), "dry")
+        self.assertEqual(wet(10, 0.06, 0, True), "hit")        # little chance but a forecast amount of 0.05" or more counts as a call
+        self.assertEqual(wet(None, 0.0, 0.0, False), "dry")    # no chance given
+        storm = self.record(forecasts={"final": self.fc(chance=10, snow=0)}, observed=self.ob(storm=True))
+        self.assertEqual(sc_mod.compare(storm, "final")["wet"], "miss")
+
+    def test_missing_pieces_give_no_comparison_and_unknown_clouds_no_cloud_error(self):
+        self.assertIsNone(sc_mod.compare(self.record(observed=None), "final"))
+        self.assertIsNone(sc_mod.compare(self.record(forecasts={"24h": self.fc()}), "final"))
+        self.assertIsNone(sc_mod.compare(self.record(observed=self.ob(cloud=None)), "final")["cloud_error"])
+
+    def test_ranks_share_the_average_for_ties(self):
+        self.assertEqual(sc_mod.ranks([10, 30, 20]), [1.0, 3.0, 2.0])
+        self.assertEqual(sc_mod.ranks([0, 0, 5, 0]), [2.0, 2.0, 4.0, 2.0])
+
+    def test_rank_correlation(self):
+        self.assertEqual(sc_mod.rank_correlation([1, 2, 3, 4], [10, 20, 30, 40]), 1.0)
+        self.assertEqual(sc_mod.rank_correlation([1, 2, 3, 4], [40, 30, 20, 10]), -1.0)
+        self.assertIsNone(sc_mod.rank_correlation([0, 0, 0, 0], [1, 2, 3, 4]))      # every game equally calm: undefined, not 0
+        self.assertIsNone(sc_mod.rank_correlation([1, 2], [1, 2]))                  # too few games
+        self.assertAlmostEqual(sc_mod.rank_correlation([1, 2, 3, 4, 5], [2, 1, 3, 5, 4]), 0.8, places=2)
+
+    def test_top_overlap_counts_games_on_both_lists_and_k_never_exceeds_the_rough_games(self):
+        def comp(game, f, o):
+            return {"game": game, "forecast_partial": f, "observed_partial": o}
+        comps = [comp("A", 50, 40), comp("B", 30, 45), comp("C", 20, 5), comp("D", 0, 0), comp("E", 0, 0), comp("F", 10, 0)]
+        overlap, k, f_top, o_top = sc_mod.top_overlap(comps)
+        self.assertEqual((k, f_top, o_top, overlap), (3, ["A", "B", "C"], ["B", "A", "C"], 3))   # only 3 games were rough in reality
+        self.assertEqual(sc_mod.top_overlap([comp("A", 0, 0), comp("B", 0, 0)])[1], 0)
+
+    def test_summarize_gives_median_errors_and_wet_counts(self):
+        recs = [self.record(f"G{i}", forecasts={"final": self.fc(feels_min=14, wind=10, chance=10, snow=0)}, observed=self.ob(feels_min=14 - e, wind=10 + w)) for i, (e, w) in enumerate([(2, 1), (4, 3), (6, 9)])]
+        s = sc_mod.summarize([sc_mod.compare(r, "final") for r in recs])
+        self.assertEqual((s["games"], s["feels_min_abs_error"], s["feels_min_bias"], s["wind_abs_error"]), (3, 4.0, -4.0, 3.0))
+        self.assertEqual(s["wet"], {"hit": 0, "miss": 0, "false alarm": 0, "dry": 3})
+
+    def test_evaluate_only_takes_games_in_the_window_with_both_sides(self):
+        games = {"in": self.record("IN @ WINDOW", NOW - timedelta(days=2)), "old": self.record("OLD @ GAME", NOW - timedelta(days=12)),
+                 "future": self.record("FUTURE @ GAME", NOW + timedelta(days=1)), "no_obs": self.record("NO @ OBS", NOW - timedelta(days=1), observed=None),
+                 "partial": self.record("ONLY @ FINAL", NOW - timedelta(days=1), forecasts={"final": self.fc()})}
+        out = sc_mod.evaluate(games, NOW - timedelta(days=8), NOW)
+        self.assertEqual(sorted(c["game"] for c in out["final"]), ["IN @ WINDOW", "ONLY @ FINAL"])
+        self.assertEqual([c["game"] for c in out["72h"]], ["IN @ WINDOW"])
+
+    def test_biggest_misses_are_ordered_by_how_far_off_the_roughness_was(self):
+        recs = [self.record("CLOSE @ CALL", forecasts={"final": self.fc(feels_min=14, wind=18)}, observed=self.ob(feels_min=14, wind=18)),
+                self.record("BIG @ MISS", forecasts={"final": self.fc(feels_min=60, feels_max=62, wind=3)}, observed=self.ob(feels_min=5, feels_max=10, wind=25))]
+        misses = sc_mod.biggest_misses([sc_mod.compare(r, "final") for r in recs], 1)
+        self.assertEqual(misses[0]["game"], "BIG @ MISS")
+
+
+class DigestTests(unittest.TestCase):
+    def data(self):
+        def g(game, score, pleasant, hours, wet=37):
+            return {"game": game, "week": "this", "indoor": False, "score": score, "pleasant": pleasant,
+                    "kickoff_utc": (NOW + timedelta(hours=hours)).isoformat(),
+                    "weather": {"temp_f": 30, "feels_like_min_f": 20, "wind_mph": 12, "precip_chance": wet}}
+        games = [g(f"W{i} @ X", 50 - i * 5, 10 + i, 10 + i) for i in range(7)]
+        games.append({**g("DOME @ IN", 0.0, None, 12), "indoor": True, "weather": None})
+        games.append({**g("NEXT @ WEEK", 99.0, 1.0, 200), "week": "next"})
+        return {"games": games}
+
+    def results(self):
+        t = ScorecardTests()
+        recs = {}
+        for i, (name, fc_min, fc_wind, ob_min, ob_wind) in enumerate([("A @ B", 14, 18, 10, 22), ("C @ D", 60, 3, 5, 25), ("E @ F", 40, 8, 38, 9), ("G @ H", 66, 2, 66, 3)]):
+            recs[f"cfb:{i}"] = t.record(name, NOW - timedelta(days=2, hours=i),
+                                        forecasts={k: t.fc(feels_min=fc_min, feels_max=fc_min + 4, wind=fc_wind) for k in ("72h", "24h", "final")},
+                                        observed=t.ob(feels_min=ob_min, feels_max=ob_min + 4, wind=ob_wind))
+        return {"games": recs}
+
+    def test_without_results_it_says_so_and_still_previews_the_week(self):
+        title, body, has = digest_mod.build(self.data(), {}, NOW, "https://example.github.io/weather-watch")
+        self.assertFalse(has)
+        self.assertIn("No finished games have both a recorded forecast", body)
+        self.assertIn("## Coming up", body)
+        self.assertIn("https://example.github.io/weather-watch/", body)
+        self.assertEqual(title, "Weather Watch weekly check: November 17, 2026")
+
+    def test_the_preview_lists_the_top_five_outdoor_games_of_this_week_only(self):
+        _, body, _ = digest_mod.build(self.data(), {}, NOW)
+        wild = body.split("### Wildest weather")[1].split("### Nicest weather")[0]
+        nice = body.split("### Nicest weather")[1]
+        self.assertEqual(wild.count("\n1. "), 1)
+        self.assertEqual([l.split("**")[1] for l in wild.splitlines() if l[:2] in ("1.", "2.", "3.", "4.", "5.")], [f"W{i} @ X" for i in range(5)])
+        self.assertNotIn("W5 @ X", wild)
+        self.assertIn("wildness 50. ", wild)
+        self.assertIn("pleasantness 16", nice)
+        self.assertNotIn("DOME @ IN", body)
+        self.assertNotIn("NEXT @ WEEK", body)
+        self.assertEqual([l.split("**")[1] for l in nice.splitlines() if l[:2] in ("1.", "2.", "3.", "4.", "5.")][0], "W6 @ X")   # nicest first
+
+    def test_kickoff_times_are_shown_in_eastern_time(self):
+        self.assertEqual(digest_mod._kickoff("2026-11-21T02:00:00+00:00"), "Fri 9:00 PM ET")
+        self.assertEqual(digest_mod._kickoff("2026-11-21T17:05:00+00:00"), "Sat 12:05 PM ET")
+
+    def test_with_results_it_reports_errors_calls_ranking_and_the_biggest_surprises(self):
+        _, body, has = digest_mod.build(self.data(), self.results(), NOW)
+        self.assertTrue(has)
+        for needle in ("## How the forecasts held up", "3 days ahead", "1 day ahead", "just before kickoff", "Did it rank the roughest games correctly?",
+                       "### Biggest surprises", "**C @ D**: forecast feels like 60° with 3 mph wind; observed 5° and 25 mph (station KXXX)"):
+            self.assertIn(needle, body)
+        self.assertNotIn("**G @ H**", body.split("### Biggest surprises")[1].split("##")[0])    # a near-perfect call isn't a surprise
+
+    def test_a_missing_site_data_file_still_gives_a_readable_digest(self):
+        title, body, has = digest_mod.build({}, {}, NOW)
+        self.assertFalse(has)
+        self.assertNotIn("## Coming up", body)
+        self.assertIn("No finished games", body)
+
+    def test_old_games_are_left_out_of_the_results(self):
+        results = self.results()
+        for rec in results["games"].values():
+            rec["kickoff_utc"] = (NOW - timedelta(days=20)).isoformat()
+        self.assertFalse(digest_mod.build(self.data(), results, NOW)[2])
+
+    def test_main_writes_the_markdown_and_the_github_outputs(self):
+        import json, os, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            paths = {k: os.path.join(d, k) for k in ("data.json", "results.json", "out.md", "gh_output")}
+            with open(paths["data.json"], "w") as fh:
+                json.dump(self.data(), fh)
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = digest_mod.main(["--data", paths["data.json"], "--results", paths["results.json"], "--out", paths["out.md"], "--github-output", paths["gh_output"]])
+            self.assertEqual(code, 0)
+            with open(paths["gh_output"]) as fh:
+                out = fh.read()
+            with open(paths["out.md"]) as fh:
+                markdown = fh.read()
+            self.assertIn("has_results=false", out)          # no results file: tolerated
+            self.assertRegex(out, r"title=Weather Watch weekly check: \w+ \d+, \d{4}\n")
+            self.assertIn("## Coming up", markdown)
 
 
 class PostseasonTests(unittest.TestCase):

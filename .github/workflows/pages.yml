@@ -55,12 +55,29 @@ jobs:
 
       # The live site's data file carries each game's score history; fetch it so
       # this run can add to it. On the very first deploy there is nothing yet.
+      # A unique query string (?run=...) gets past the Pages cache, which could otherwise hand back a copy
+      # from a few minutes ago.
       - name: Fetch previous data
-        run: curl -fsSL --retry 3 --retry-delay 2 "${{ steps.pages.outputs.base_url }}/data.json" -o previous-data.json || echo "No previous data yet; starting fresh history."
+        run: curl -fsSL --retry 3 --retry-delay 2 "${{ steps.pages.outputs.base_url }}/data.json?run=${{ github.run_id }}" -o previous-data.json || echo "No previous data yet; starting fresh history."
+
+      # The forecast archive can't be rebuilt (the Weather Service keeps observations for only about a week),
+      # so a fresh start is allowed only if the site has no results.json yet (404). Any other failure stops
+      # the run, which keeps the live site, and the archive on it, exactly as it was.
+      - name: Fetch previous forecast archive
+        run: |
+          code=$(curl -sS -L --retry 3 --retry-delay 2 -o previous-results.json -w '%{http_code}' "${{ steps.pages.outputs.base_url }}/results.json?run=${{ github.run_id }}" || echo 000)
+          echo "results.json: HTTP $code"
+          if [ "$code" = "404" ]; then
+            rm -f previous-results.json
+            echo "No forecast archive yet; starting one."
+          elif [ "$code" != "200" ]; then
+            echo "::error::Could not fetch the forecast archive (HTTP $code). Stopping so it is not reset."
+            exit 1
+          fi
 
       # Fails (and keeps the previous site) if the forecast source is down.
       - name: Build data file
-        run: python -m weather_watch --site-data docs/data.json --previous previous-data.json --seed data/history-seed.json
+        run: python -m weather_watch --site-data docs/data.json --previous previous-data.json --seed data/history-seed.json --previous-results previous-results.json --results-out docs/results.json
 
       - uses: actions/upload-pages-artifact@v5
         with:

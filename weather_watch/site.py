@@ -62,10 +62,11 @@ def build_payload(
     }
 
 
-def write_payload(payload: dict, path: str | os.PathLike) -> None:
+def write_payload(payload: dict, path: str | os.PathLike, compact: bool = False) -> None:
     """Write atomically so a crash can't leave a half-written data file."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    text = json.dumps(payload, separators=(",", ":"), ensure_ascii=False) if compact else json.dumps(payload, indent=1, ensure_ascii=False)
+    tmp.write_text(text + "\n", encoding="utf-8")
     os.replace(tmp, path)

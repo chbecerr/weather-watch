@@ -92,6 +92,33 @@ python3 -m weather_watch --site-data docs/data.json
 python3 -m http.server -d docs 8000   # open http://localhost:8000
 ```
 
+## Forecast check and the weekly email
+
+Every forecast is saved, and once a game is over it is checked against what the nearest National
+Weather Service station actually measured (`weather_watch/archive.py`, `observations.py`,
+`scorecard.py`). This can't be done after the fact: the Weather Service keeps observations for only
+about a week, so a game that isn't captured can't be checked later.
+
+- **What is saved:** the forecast of every upcoming outdoor game at three lead times (3 days ahead,
+  1 day ahead, and the last run before kickoff), then the observed feels-like temperature, sustained
+  wind, cloud cover and whether it rained or snowed during the 4 hours from kickoff. It lives in
+  `results.json`, published with the site and carried forward by each run (kept 30 days). The run stops
+  rather than start a fresh archive if it can't fetch the old one, unless the site has none yet.
+- **What can and can't be checked:** stations rarely report rain or snow *amounts* (and gusts only when
+  it gusts), so the scorecard checks temperature, wind, clouds and "did it rain or snow". The full
+  wildness score can't be verified; a *partial* score (cold, heat and sustained wind, same ramps) is
+  computed from the forecast and from the observation, so the two are comparable.
+- **The digest:** `.github/workflows/digest.yml` runs weekly (Tuesdays) and posts a GitHub issue:
+  typical forecast errors, rain/snow calls right and wrong, whether the forecast ranked the roughest games
+  in the right order (rank correlation and top-5 overlap), the biggest surprises, and the coming week's
+  wildest and nicest games. The issue is assigned to, and mentions, the repository owner, so GitHub
+  emails it; there are no secrets to set up. Make sure email is on under GitHub Settings > Notifications.
+  A scheduled run posts only when there are results; from the Actions tab you can run it by hand, and
+  by default that is a dry run that shows the digest in the run's summary (tick "post" to send it).
+- **Limits:** a station can be some miles from the stadium and its conditions can differ; stations that
+  report no wind are skipped in favour of the next nearest; the first results appear after the first
+  games finish, and averages mean little until a few weeks have been collected.
+
 ## Score
 
 Higher is more extreme, and a calm, dry, mild game scores 0. Each factor is a ramp
