@@ -131,7 +131,7 @@ own factors and ramps. It starts at 100 and subtracts points:
 Heat costs more than the same distance of cold, because you can add layers but not take
 them off. The sun position is calculated (`weather_watch/solar.py`, NOAA's formulas; checked
 against the astral library at 8 places on 5 dates, worst difference 2.5 minutes), so a night
-game's clouds cost nothing. Bands: 95+ great, 80-94 nice, 60-79 meh, under 60 rough. Like the
+game's clouds cost nothing. The score stops at 0, so when games tie (the roughest ones do) the less wild one ranks nicer, then the earlier kickoff. Bands: 95+ great, 80-94 nice, 60-79 meh, under 60 rough. Like the
 other score, the reference points are judgment calls, are in `weather_watch/pleasantness.py`
 in one place, and the tests pin them down. Changing them doesn't need a `SCORE_VERSION` bump,
 because no pleasantness history is kept.

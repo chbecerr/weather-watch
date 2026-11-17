@@ -145,7 +145,12 @@ function sorted(list) {
     if (x == null) return 1; // games without data always sink to the bottom
     if (y == null) return -1;
     const order = x < y ? -1 : x > y ? 1 : 0;
-    return order ? order * sign : a.kickoff - b.kickoff; // equal scores: earliest kickoff first, whichever way it's sorted
+    if (order) return order * sign;
+    // Equal pleasantness (the worst games all bottom out at 0): the calmer game is the nicer one.
+    if (state.mode === "nice" && state.sort === "score" && a.score != null && b.score != null && a.score !== b.score) {
+      return (a.score - b.score) * -sign;
+    }
+    return a.kickoff - b.kickoff; // otherwise earliest kickoff first, whichever way it's sorted
   });
 }
 

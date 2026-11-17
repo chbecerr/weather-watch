@@ -290,6 +290,26 @@ class PleasantnessTests(unittest.TestCase):
             self.assertEqual(pleasantness(wxp(**kwargs), 0.0).band, expected, kwargs)
 
 
+class RankNicestTests(unittest.TestCase):
+    def row(self, name, pleasant, score, kickoff="2026-11-21T18:00:00+00:00"):
+        return {"game": name, "pleasant": pleasant, "score": score, "kickoff_utc": kickoff}
+
+    def order(self, rows):
+        return [r["game"] for r in cli_mod.rank_nicest(rows)]
+
+    def test_best_first_and_dome_games_last(self):
+        rows = [self.row("dome", None, 0.0), self.row("meh", 65.0, 12.0), self.row("great", 100.0, 0.0), self.row("nice", 88.0, 3.0)]
+        self.assertEqual(self.order(rows), ["great", "nice", "meh", "dome"])
+
+    def test_games_that_both_bottom_out_at_zero_are_still_told_apart_by_how_wild_they_are(self):
+        rows = [self.row("wilder", 0.0, 39.3), self.row("less wild", 0.0, 29.1)]
+        self.assertEqual(self.order(rows), ["less wild", "wilder"])
+
+    def test_still_tied_games_go_earliest_kickoff_first(self):
+        rows = [self.row("late", 100.0, 0.0, "2026-11-21T23:00:00+00:00"), self.row("early", 100.0, 0.0, "2026-11-19T00:00:00+00:00")]
+        self.assertEqual(self.order(rows), ["early", "late"])
+
+
 class SolarTests(unittest.TestCase):
     NYC = (40.7128, -74.0060)
     EST = timezone(timedelta(hours=-5))

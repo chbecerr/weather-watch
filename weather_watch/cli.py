@@ -133,6 +133,12 @@ def build_report(leagues: list[str], weeks: tuple[str, ...] = ("this", "next")) 
     return Report(rows, week_info, hidden, hidden_soon)
 
 
+def rank_nicest(rows: list[dict]) -> list[dict]:
+    """Best first. Equal pleasantness (the worst games all bottom out at 0): the less wild game
+    first, then the earlier kickoff. Dome games have no pleasantness score and go last."""
+    return sorted(rows, key=lambda r: (r["pleasant"] is None, -(r["pleasant"] or 0), r["score"] or 0, r["kickoff_utc"]))
+
+
 def _fmt_kickoff(iso: str, tz: ZoneInfo, tba: bool) -> str:
     dt = datetime.fromisoformat(iso).astimezone(tz)
     return dt.strftime("%a %m/%d") + ("   TBA" if tba else dt.strftime(" %I:%M%p").lower().replace(" 0", "  "))
@@ -235,8 +241,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.include_indoor:
         rows = [r for r in rows if not r["indoor"]]
-    if args.nicest:  # dome games have no pleasantness score and go last
-        rows.sort(key=lambda r: (r["pleasant"] is None, -(r["pleasant"] or 0), r["kickoff_utc"]))
+    if args.nicest:
+        rows = rank_nicest(rows)
     if args.top:
         rows = rows[: args.top]
 
