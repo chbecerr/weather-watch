@@ -41,7 +41,10 @@ const state = {
   games: [], info: {}, hidden: {}, week: "this", autoNext: false,
   league: "all", day: "all", q: "", showAll: false, sort: "score", dir: "desc",
   favs: new Set(), mine: false, open: new Set(), events: new Set(),
+  view: "list", lens: "feels", selected: null,
 };
+const LENS_KEYS = ["feels", "wind", "precip"];
+const dayLongFmt = new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric" });
 
 // ---- tiny helpers -------------------------------------------------------
 
@@ -425,8 +428,98 @@ function toggleFav(team, gameId) {
   if (btn) btn.focus();
 }
 
+// ---- map view -----------------------------------------------------------
+
+let mapToken = 0;
+
+function mapDay(base) {
+  if (state.day !== "all") return { day: state.day, auto: false };
+  return { day: window.WeatherMap.busiestDay(base), auto: true };
+}
+
+function showTip(id, x, y) {
+  const tip = $("mapTip");
+  const g = state.games.find((q) => q.id === id);
+  if (!g) { tip.hidden = true; return; }
+  const lens = window.WeatherMap.LENSES[state.lens];
+  tip.replaceChildren(el("strong", { text: g.matchup }), el("br"), `${lens.format(lens.value(g.weather))} · ${timeFmt.format(g.kickoff)}`);
+  tip.hidden = false;
+  tip.style.left = `${(x / 975) * 100}%`;
+  tip.style.top = `${(y / 610) * 100}%`;
+}
+
+function selectMapGame(id) {
+  state.selected = state.selected === id ? null : id;
+  renderMap();
+}
+
+function showInList(id) {
+  state.view = "list";
+  state.open.add(id);
+  render();
+  const li = [...document.querySelectorAll(".game")].find((n) => n.dataset.id === id);
+  if (li) { li.scrollIntoView({ block: "center" }); const b = li.querySelector("button"); if (b) b.focus(); }
+}
+
+async function renderMap() {
+  const token = ++mapToken;
+  const M = window.WeatherMap;
+  const lens = M.LENSES[state.lens];
+  const base = state.games.filter(matchesBase);
+  const { day, auto } = mapDay(base);
+  const onDay = base.filter((g) => g.day === day);
+  const shownIds = new Set(visible().map((g) => g.id));
+  const dimmed = new Set(onDay.filter((g) => !shownIds.has(g.id)).map((g) => g.id));
+  if (!onDay.some((g) => g.id === state.selected)) state.selected = null;
+  $("lens").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === state.lens)));
+  M.drawLegend($("mapLegend"), lens);
+  const dayLabel = onDay.length ? dayLongFmt.format(onDay[0].kickoff) : "";
+  $("mapCaption").textContent = onDay.length
+    ? `${lens.note}, ${dayLabel}${auto ? " (the day with the most games; pick a day above to change it)" : ""}.`
+    : "No games to show on the map with those filters.";
+  let outline;
+  try { outline = await M.loadOutline(); } catch (err) {
+    $("mapNote").textContent = "Couldn't load the map outline. Try reloading, or use the list.";
+    console.error(err);
+    return;
+  }
+  if (token !== mapToken || state.view !== "map") return; // a newer render took over
+  const result = M.draw({
+    canvas: $("mapCanvas"), svg: $("mapSvg"), outline, games: onDay, lens,
+    selectedId: state.selected, dimmedIds: dimmed, onSelect: selectMapGame, onHover: (id, x, y) => (id ? showTip(id, x, y) : ($("mapTip").hidden = true)),
+  });
+  const notes = [];
+  if (result.left) notes.push(`${result.left} game${result.left === 1 ? "" : "s"} not on the map (no ${lens.label.toLowerCase()} forecast)`);
+  if (dimmed.size) notes.push(`${dimmed.size} dimmed by the weather filters`);
+  $("mapNote").textContent = notes.join(" · ");
+  const sorted_ = result.values.slice().sort((a, b) => a.value - b.value);
+  $("mapSummary").textContent = sorted_.length
+    ? `${result.shown} games on ${dayLabel}. Lowest ${lens.label}: ${sorted_[0].game}, ${lens.format(sorted_[0].value)}. Highest: ${sorted_[sorted_.length - 1].game}, ${lens.format(sorted_[sorted_.length - 1].value)}.`
+    : "";
+  const card = $("mapCard");
+  const g = onDay.find((q) => q.id === state.selected);
+  if (!g) { card.hidden = true; card.replaceChildren(); return; }
+  card.replaceChildren(
+    el("strong", { text: g.matchup }),
+    el("span", { text: ` · ${g.venue}, ${g.location} · ${timeFmt.format(g.kickoff)} · ${lens.format(lens.value(g.weather))}` }),
+    el("button", { type: "button", class: "linkbtn", text: "Show in list", onclick: () => showInList(g.id) }),
+  );
+  card.hidden = false;
+}
+
+function syncView() {
+  const map = state.view === "map";
+  $("view").querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === state.view)));
+  $("lens").hidden = !map;
+  $("mapview").hidden = !map;
+  $("head").hidden = map;
+  $("list").hidden = map;
+  if (map) renderMap(); else { mapToken++; }
+}
+
 function render() {
   syncMode();
+  syncView();
   const rows = sorted(visible());
   const list = $("list");
   list.replaceChildren();
@@ -473,6 +566,9 @@ function readUrl() {
   if (u.get("indoor") === "1") state.showAll = true;
   const mode = pick("mode", ["wild", "nice"]);
   if (mode) state.mode = mode;
+  if (u.get("view") === "map") state.view = "map";
+  const lens = pick("lens", LENS_KEYS);
+  if (lens) state.lens = lens;
   state.events = new Set((u.get("event") || "").split(",").filter((k) => EVENTS.some((e) => e.key === k)));
   state.nice = new Set((u.get("nice") || "").split(",").filter((k) => NICE.some((e) => e.key === k)));
   return Boolean(week);
@@ -487,6 +583,7 @@ function writeUrl() {
   if (state.sort !== "score" || state.dir !== "desc") { u.set("sort", state.sort); u.set("dir", state.dir); }
   if (state.showAll) u.set("indoor", "1");
   if (state.mode === "nice") u.set("mode", "nice");
+  if (state.view === "map") { u.set("view", "map"); if (state.lens !== "feels") u.set("lens", state.lens); }
   if (state.events.size) u.set("event", EVENTS.filter((e) => state.events.has(e.key)).map((e) => e.key).join(","));
   if (state.nice.size) u.set("nice", NICE.filter((e) => state.nice.has(e.key)).map((e) => e.key).join(","));
   const qs = u.toString().replace(/%2C/g, ",");
@@ -532,6 +629,17 @@ function setupControls() {
     state.league = b.dataset.v; store("league", state.league); syncLeague(); render();
   });
   syncLeague();
+
+  $("view").addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    state.view = b.dataset.v; store("view", state.view); render();
+  });
+  $("lens").addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    state.lens = b.dataset.v; store("lens", state.lens); render();
+  });
 
   $("mode").addEventListener("click", (e) => {
     const b = e.target.closest("button");
@@ -584,6 +692,8 @@ async function main() {
   state.mine = store("mine") === true;
   const savedMode = store("mode");
   if (savedMode === "wild" || savedMode === "nice") state.mode = savedMode;
+  if (store("view") === "map") state.view = "map";
+  if (LENS_KEYS.includes(store("lens"))) state.lens = store("lens");
   const savedFavs = store("favs");
   if (Array.isArray(savedFavs)) state.favs = new Set(savedFavs.filter((t) => typeof t === "string"));
   const weekFromUrl = readUrl(); // links override remembered preferences

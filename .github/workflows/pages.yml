@@ -50,6 +50,9 @@ jobs:
       - name: Run tests
         run: python -m unittest
 
+      - name: Run map tests
+        run: node --test tests/js/*.test.js
+
       - uses: actions/configure-pages@v6
         id: pages
 

@@ -92,6 +92,10 @@ python3 -m weather_watch --site-data docs/data.json
 python3 -m http.server -d docs 8000   # open http://localhost:8000
 ```
 
+### Map
+
+The **Map** toggle shows one day's games as dots on a US map, colored by feels-like temperature, wind or chance of precipitation. The shading between dots is a kernel-smoothed estimate (about 100 miles of influence) that fades out where there are no games, so it shows regional patterns, not a forecast for places without a stadium. It needs no map tiles or libraries: `docs/map.js` projects the state outlines in `docs/us-states.json` (built by `tools/build_us_outline.py` from US Census data via us-atlas, see `docs/NOTICES.txt`) and paints the shading on a canvas. Its tests run with `node --test tests/js/*.test.js`.
+
 ## Forecast check and the weekly email
 
 Every forecast is saved, and once a game is over it is checked against what the nearest National

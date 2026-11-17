@@ -70,6 +70,31 @@
       <button type="button" class="linkbtn" id="clearEvents" hidden>Clear</button>
     </section>
 
+    <section class="viewbar" aria-label="View">
+      <div class="seg" role="group" aria-label="View" id="view">
+        <button type="button" data-v="list" aria-pressed="true">List</button>
+        <button type="button" data-v="map" aria-pressed="false">Map</button>
+      </div>
+      <div class="seg" role="group" aria-label="Map colors" id="lens" hidden>
+        <button type="button" data-v="feels" aria-pressed="true">Feels-like</button>
+        <button type="button" data-v="wind" aria-pressed="false">Wind</button>
+        <button type="button" data-v="precip" aria-pressed="false">Precipitation</button>
+      </div>
+    </section>
+
+    <section id="mapview" class="mapview" aria-label="Map of games" hidden>
+      <p class="mapcaption" id="mapCaption" aria-live="polite"></p>
+      <div class="mapstage" id="mapStage">
+        <canvas id="mapCanvas" aria-hidden="true"></canvas>
+        <svg id="mapSvg" viewBox="0 0 975 610" role="group" aria-label="Games on the map"></svg>
+        <div class="maptip" id="mapTip" role="status" hidden></div>
+      </div>
+      <div class="legend" id="mapLegend"></div>
+      <div class="mapcard" id="mapCard" hidden></div>
+      <p class="mapnote" id="mapNote"></p>
+      <p class="sr" id="mapSummary" aria-live="polite"></p>
+    </section>
+
     <div class="head" id="head" role="group" aria-label="Sort by">
       <button type="button" data-sort="score">Score</button>
       <button type="button" data-sort="game">Game</button>
@@ -92,9 +117,11 @@
     <p><strong>Weather filters</strong> show games forecast to have, at some point during the game: wind over 10 mph (sustained), feels-like 32° or colder, feels-like 90° or hotter, 0.05″ or more of rain, 0.1″ or more of snow, thunderstorms, or a 50% or higher chance of precipitation. Pick several to see games matching any of them. The number on each chip is how many of the games you're looking at match it. The chance of precipitation is the Weather Service's, as its highest value during the game; it doesn't change the score.</p>
     <p><strong>Nicest weather</strong> scores how pleasant it is to sit in the stands for three hours, from 0 to 100, starting at 100 and subtracting points. It is not the wildness score upside down: most games are completely calm by that measure, so flipping it would tie dozens of them. The best temperature is a feels-like of 60 to 72°F, scored hour by hour; heat costs more than the same distance of cold, because you can add layers but not remove them. Wind costs from about 6 mph, a chance of rain or snow and the amount both count (thunderstorms extra), and overcast skies cost a little, but only while the sun is up. As a rough guide: 95 or more is great (essentially the ideal range), 80 to 94 is nice (a cool evening, a breeze, a hint of rain), 60 to 79 is meh, and under 60 is rough. Dome games are climate controlled, so they have no pleasantness score; tick "Include dome games" to list them at the bottom. These are judgment calls, not measurements.</p>
     <p>Temp is at kickoff; "feels" is the coldest feels-like during the game; wind is the top sustained speed with the top gust beneath it. Forecasts are for the stadium's city and come from the US National Weather Service, so they cover US venues about 7 days ahead and get less certain the further out the game is.</p>
+    <p><strong>Map.</strong> Each dot is a game, colored by the chosen measure. The shading between dots is a smooth estimate that blends nearby games (about 100 miles of influence) and fades out where there are none, so it shows regional patterns, not a forecast for the spots between stadiums. The map shows one day at a time, because games kick off at different times; with "All days" it picks the day with the most games. Games that don't match the weather filters are dimmed. State outlines from US Census data via us-atlas.</p>
     <p><a href="https://github.com/chbecerr/weather-watch">Source on GitHub</a></p>
   </footer>
 
+  <script src="map.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
