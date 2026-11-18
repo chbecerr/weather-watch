@@ -61,11 +61,6 @@ This week / Next week switch.
   and adds the new scores to every game's history (kept 8 days). The page shows a ▲/▼ chip
   for games whose score moved 5+ points since about a day ago, and a small history line in
   the game's details. It appears once the site has several hours of history.
-  The first day was bootstrapped from `data/history-seed.json`: real forecasts from an earlier run
-  of this pipeline (about 04:50 UTC on 2026-11-16), re-scored with the current formula and matched
-  to games by matchup and kickoff. `--seed` merges it in; published samples always win over it, it is
-  ignored if `SCORE_VERSION` changes, and its samples are dropped after 8 days. Safe to delete,
-  along with the `--seed` flag in the workflow, once the site has a day of its own history.
 - **Wildest / Nicest weather:** a switch at the top changes the whole ranking. *Nicest* uses
   the pleasantness score below, its own set of filter chips (Great, Mild, Sunny, Calm, Dry),
   and green-to-red bands. Dome games have no pleasantness score; "Include dome games" lists

@@ -17,9 +17,8 @@ from .http import NetworkError
 from .pleasantness import band, pleasantness
 from .scoring import score
 from .solar import daylight_fraction
-from .history import NOTABLE_MOVE, load_previous, load_seed
+from .history import NOTABLE_MOVE, load_previous
 from .weather import load_cache, save_cache
-from .history import merge as merge_history
 from .site import SOON_DAYS, UnhealthyData, build_payload, write_payload
 
 
@@ -245,10 +244,6 @@ def main(argv: list[str] | None = None) -> int:
         help="with --site-data: write the updated forecast archive here (published as results.json)",
     )
     p.add_argument(
-        "--seed", metavar="PATH",
-        help="with --site-data: extra earlier scores to start the history from (data/history-seed.json)",
-    )
-    p.add_argument(
         "--previous", metavar="PATH",
         help="with --site-data: the previously published data file, used to carry score history forward",
     )
@@ -269,11 +264,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.site_data:
         previous = load_previous(args.previous)
-        if args.seed:
-            seed = load_seed(args.seed)
-            if seed:
-                previous = merge_history(previous, seed)
-                print(f"seeded score history for {len(seed)} games from {args.seed}", file=sys.stderr)
         try:
             payload = build_payload(rows, week_info, hidden, previous=previous, hidden_soon=hidden_soon)
         except UnhealthyData as err:

@@ -80,7 +80,18 @@ jobs:
 
       # Fails (and keeps the previous site) if the forecast source is down.
       - name: Build data file
-        run: python -m weather_watch --site-data docs/data.json --previous previous-data.json --seed data/history-seed.json --previous-results previous-results.json --results-out docs/results.json
+        run: python -m weather_watch --site-data docs/data.json --previous previous-data.json --previous-results previous-results.json --results-out docs/results.json
+
+      # Browsers keep a site's files for about 10 minutes, so after a deploy a visitor could get the old
+      # script or stylesheet. Stamping their links with this commit makes each deploy a new address.
+      # (Only the published copy is stamped; docs/index.html in the repository stays plain.)
+      - name: Stamp asset links with the commit
+        run: |
+          stamp="${GITHUB_SHA::8}"
+          for f in style.css map.js app.js; do
+            sed -i -E "s#((href|src)=\"$f)\"#\1?v=$stamp\"#" docs/index.html
+          done
+          grep -c "?v=$stamp" docs/index.html | grep -qx 3 || { echo "::error::asset links were not stamped"; exit 1; }
 
       - uses: actions/upload-pages-artifact@v5
         with:
